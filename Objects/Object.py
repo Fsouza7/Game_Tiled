@@ -1,4 +1,4 @@
-from setup import *
+from Importations import *
 
 
 class Object(pygame.sprite.Sprite):

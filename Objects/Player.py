@@ -1,18 +1,18 @@
 from Importations import *
-from setup import *
-
-
 
 
 class Player(pygame.sprite.Sprite):
+
     COLOR = (255, 0, 0)
     GRAVITY = 1
-    SPRITES = load_sprite_sheets("MainCharacters", "PinkMan", 32, 32, True)
+
     ANIMATION_DELAY = 2
 
     def __init__(self, x, y, width, height):
+        from setup import load_sprite_sheets
         super().__init__()
         self.rect = pygame.Rect(x, y, width, height)
+        self.SPRITES = load_sprite_sheets("MainCharacters", "VirtualGuy", 32, 32, True)
         self.x_vel = 0
         self.y_vel = 0
         self.mask = None

@@ -8,7 +8,7 @@ pygame.init()
 
 pygame.display.set_caption("Platformer")
 
-WIDTH, HEIGHT = 1400, 900
+WIDTH, HEIGHT = 1000, 800
 FPS = 60
 PLAYER_VEL = 6
 
