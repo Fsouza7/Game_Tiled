@@ -5,6 +5,9 @@ from Objects import Player,Block,Object,Fire,Fan,Fruits
 from settings import *
 from Logics.Colisoes import *
 
+offset_x = 0
+scroll_area_width = 800
+
 pygame.init()
 
 pygame.display.set_caption("Platformer")
@@ -34,6 +37,7 @@ def get_background(name):
 
 def main(window):
     global player, fire
+    global offset_x
     clock = pygame.time.Clock()
     background, bg_image = get_background("Yellow.png")
 
@@ -60,10 +64,6 @@ def main(window):
             elif cell == "l":
                 block = Block.Block(x, y, block_size, "decor")
                 objects.append(block)
-
-
-    offset_x = 0
-    scroll_area_width = 200
 
     run = True
     while run:

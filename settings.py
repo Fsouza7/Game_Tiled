@@ -12,7 +12,7 @@ level_map= [
 ',,,,,,,llll,,,,,p,,,,,,,,,,,,,,,,,,,,l,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,',
 ',,,,,,,,mmmmmmmmmmmmmmmmmmmm,,,,f,,,,,,ll,,,,,,,,f,,,,,,,mmmmmmmmmm,,,,f,,,,,,,,,,,',
 ',,,,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,,,,,,,,,,,xxxxxxxxxxxxxxxxxxxxxxxxxxxx,,,,,,,,,',
-'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,,,,,,,,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 ]
 
 
@@ -23,6 +23,7 @@ objects=[]
 window = pygame.display.set_mode((WIDTH, HEIGHT))
 apples=[]
 fires = []
+
 
 
 def flip(sprites):
