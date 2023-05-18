@@ -22,7 +22,6 @@ class Player(pygame.sprite.Sprite):
         self.jump_count = 0
         self.hit = False
         self.hit_count = 0
-        self.eat_fruit = False
         self.count_fruits = 0
 
     def jump(self):
@@ -39,10 +38,7 @@ class Player(pygame.sprite.Sprite):
     def make_hit(self):
         self.hit = True
 
-    def eat_fruits(self):
-        self.count_fruits += 1
-        self.eat_fruit = True
-        return self.count_fruits
+
 
     def move_left(self, vel):
         self.x_vel = -vel
@@ -56,9 +52,25 @@ class Player(pygame.sprite.Sprite):
             self.direction = "right"
             self.animation_count = 0
 
-    def loop(self, fps):
+    def eat_apple(self, apple):
+        if pygame.sprite.collide_rect(self, apple):
+                self.count_fruits += 1
+
+
+    def eat_fruits(self):
+        self.count_fruits += 1
+        self.eat_fruit = True
+        return self.count_fruits
+
+    def loop(self, fps,apples):
         self.y_vel += min(1, (self.fall_count / fps) * self.GRAVITY)
         self.move(self.x_vel, self.y_vel)
+
+        self.eat_fruit = False
+        for apple in apples:
+            if self.eat_apple(apple):
+                self.eat_fruits()
+                break
 
         if self.hit:
             self.hit_count += 1

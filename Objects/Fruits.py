@@ -4,7 +4,7 @@ from Objects.Object import Object
 
 
 class Apple(Object):
-    ANIMATION_DELAY = 2
+    ANIMATION_DELAY = 5
 
     def __init__(self, x, y, width, height):
         from setup import load_sprite_sheets
@@ -14,8 +14,12 @@ class Apple(Object):
         self.mask = pygame.mask.from_surface(self.image)
         self.animation_count = 3
         self.animation_name = "Apple"
+        self.eaten = False
 
     def loop(self):
+        if self.eaten:
+            return
+
         sprites = self.apple[self.animation_name]
         sprite_index = (self.animation_count //
                         self.ANIMATION_DELAY) % len(sprites)
@@ -27,3 +31,11 @@ class Apple(Object):
 
         if self.animation_count // self.ANIMATION_DELAY > len(sprites):
             self.animation_count = 0
+
+
+    @staticmethod
+    def eat(apples,player,objects):
+        for apple in apples:
+            if pygame.sprite.collide_rect(apple, player):
+                apples.remove(apple)
+                objects.remove(apple)

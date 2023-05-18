@@ -2,18 +2,19 @@ import pygame
 
 from Importations import *
 from Objects import Player,Block,Object,Fire,Fan,Fruits
-
+from settings import level_map
 
 pygame.init()
 
 pygame.display.set_caption("Platformer")
 
-WIDTH, HEIGHT = 1000, 800
+WIDTH, HEIGHT = 1400, 800
 FPS = 60
 PLAYER_VEL = 6
-
+objects=[]
 window = pygame.display.set_mode((WIDTH, HEIGHT))
-
+apples=[]
+fires = []
 
 def flip(sprites):
     return [pygame.transform.flip(sprite, True, False) for sprite in sprites]
@@ -34,11 +35,17 @@ def draw(window, background, bg_image, player, objects, offset_x):
 def handle_vertical_collision(player, objects, dy):
     collided_objects = []
     for obj in objects:
-        if pygame.sprite.collide_mask(player, obj):
+        if pygame.sprite.collide_rect(player, obj):
             if dy > 0:
+                if obj.name == "apple":
+                    # Ignora a colisão com a maçã
+                    continue
                 player.rect.bottom = obj.rect.top
                 player.landed()
             elif dy < 0:
+                if obj.name == "apple":
+                    # Ignora a colisão com a maçã
+                    continue
                 player.rect.top = obj.rect.bottom
                 player.hit_head()
 
@@ -52,7 +59,10 @@ def collide(player, objects, dx):
     player.update()
     collided_object = None
     for obj in objects:
-        if pygame.sprite.collide_mask(player, obj):
+        if pygame.sprite.collide_rect(player, obj):
+            if obj.name == "apple":
+                # Ignora a colisão com a maçã
+                continue
             collided_object = obj
             break
 
@@ -67,22 +77,19 @@ def handle_move(player, objects):
     player.x_vel = 0
     collide_left = collide(player, objects, -PLAYER_VEL * 2)
     collide_right = collide(player, objects, PLAYER_VEL * 2)
+    vertical_collide = handle_vertical_collision(player, objects, player.y_vel)
+    to_check = [collide_left, collide_right, *vertical_collide]
 
     if keys[pygame.K_a] and not collide_left:
         player.move_left(PLAYER_VEL)
     if keys[pygame.K_d] and not collide_right:
         player.move_right(PLAYER_VEL)
 
-    vertical_collide = handle_vertical_collision(player, objects, player.y_vel)
-    to_check = [collide_left, collide_right, *vertical_collide]
-
     for obj in to_check:
-        if obj and obj.name == "fire_on":
+        if obj and obj.name == "fire":
             player.make_hit()
         if obj and obj.name == "fan":
             player.make_hit()
-
-
 
 
 def load_sprite_sheets(dir1, dir2, width, height, direction=False):
@@ -133,28 +140,31 @@ def get_block(size):
 
 
 def main(window):
+    global player, fire
     clock = pygame.time.Clock()
     background, bg_image = get_background("Blue.png")
 
     block_size = 66
 
-    player = Player.Player(40, 100, 50, 50)
-    fire_on = Fire.Fire(100, HEIGHT - block_size - 64, 16, 32)
-    fan1 = Fan.Fan(500, HEIGHT - block_size - 20, 24, 8)
-    mac = [Fruits.Apple(i * block_size, HEIGHT - block_size * 6.68,32, 25)
-            for i in range(8,15)]
-    fan1.on()
-    fire_on.on()
-    fire2 = Fire.Fire(250, HEIGHT - block_size - 64, 16, 32)
-    fire2.off()
-    floor = [Block.Block(i * block_size, HEIGHT - block_size, block_size)
-             for i in range(-WIDTH // block_size, (WIDTH * 2) // block_size)]
+    for row_index, row in enumerate(level_map):
+        for col_index, cell in enumerate(row):
+            x = col_index * block_size
+            y = row_index * block_size
 
-    platform = [Block.Block(i * block_size, HEIGHT - block_size * 6, block_size)
-                for i in range(8,15)]
+            if cell == "x":
+                block = Block.Block(x, y, block_size)
+                objects.append(block)
+            elif cell == "p":
+                player = Player.Player(x, y, 50, 50)
+            elif cell == "m":
+                apple = Fruits.Apple(x, y, 32,32)
+                objects.append(apple)
+                apples.append(apple)
+            elif cell == "f":
+                fire = Fire.Fire(x,y, 16,32)
+                objects.append(fire)
+                fires.append(fire)
 
-    objects = [*floor,*platform, Block.Block(0, HEIGHT - block_size * 3, block_size),
-               Block.Block(block_size * 3, HEIGHT - block_size * 4, block_size), fire_on,fire2,fan1,*mac]
 
     offset_x = 0
     scroll_area_width = 200
@@ -172,13 +182,18 @@ def main(window):
                 if event.key == pygame.K_SPACE and player.jump_count < 2:
                     player.jump()
 
-        player.loop(FPS)
-        fire_on.loop()
-        fire2.loop()
-        fan1.loop()
+        keys = pygame.key.get_pressed()
 
+        player.loop(FPS,apples)
+        for aple in apples:
+            aple.loop()
+        for fir in fires:
+            fir.on()
+            fir.loop()
         handle_move(player, objects)
+
         draw(window, background, bg_image, player, objects, offset_x)
+        Fruits.Apple.eat(apples,player,objects)
 
         if ((player.rect.right - offset_x >= WIDTH - scroll_area_width) and player.x_vel > 0) or (
                 (player.rect.left - offset_x <= scroll_area_width) and player.x_vel < 0):
