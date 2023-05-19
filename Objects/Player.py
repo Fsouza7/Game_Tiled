@@ -6,7 +6,7 @@ class Player(pygame.sprite.Sprite):
     COLOR = (255, 0, 0)
     GRAVITY = 1
 
-    ANIMATION_DELAY = 2
+    ANIMATION_DELAY = 3
 
     def __init__(self, x, y, width, height):
         from setup import load_sprite_sheets

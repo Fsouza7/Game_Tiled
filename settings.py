@@ -4,8 +4,8 @@ level_map= [
 ',,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,m,,,,,,,,,,,,,,,,,,,',
 ',,,,,,,,,,,,,f,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,xx,,,,,,,,,,,,,,,,,',
 ',,,,,,,,,,,,xxx,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,',
-',,,,,,,,,,,,,,,,,,,,,,,,,,,,f,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,mf,,,,,,,,,,,',
 ',,,,,,,,,,,,,,,,,,,,,,,,,,,xxx,,,,,,,,,,,,,,,,,,,m,,,,xxxxx,mmmmm,,,,,xxx,,,,,,,,,,',
+',,,,,,,,,,,,,,,f,,,,,,,,,,,,,,,,,,,,,,m,,xx,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,',
 ',,,,,,,,,,,,,,,f,,,,,,,,,,,,,,,,,,,,,,m,,xx,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,',
 ',,,,,,,,,,,,,xxxxx,,,,,,xx,,,,,,,,,,,,,,,,,,,,,,,,x,,,,,,,,,,,,,,,,lll,,,,,,,,,,,,,',
 ',,,,,,,,,,,,,,,,,,,,,mmmmmmmm,,,x,,,,xx,,,,,,ll,,,,,mmmmmm,,,ll,,,,,,,,,,,,,,,,,,,,',
@@ -18,13 +18,14 @@ level_map= [
 
 WIDTH, HEIGHT = 1400, 800
 FPS = 60
-PLAYER_VEL = 6
+PLAYER_VEL = 9
 objects=[]
 window = pygame.display.set_mode((WIDTH, HEIGHT))
 apples=[]
 fires = []
-
-
+button_infos = []
+menu_folder = "./assets/menu/Buttons/Menu_jogo"
+menu_path = os.path.join(os.getcwd(), menu_folder)
 
 def flip(sprites):
     return [pygame.transform.flip(sprite, True, False) for sprite in sprites]
@@ -53,3 +54,18 @@ def load_sprite_sheets(dir1, dir2, width, height, direction=False):
             all_sprites[image.replace(".png", "")] = sprites
 
     return all_sprites
+
+def load_button_images():
+    button_images = []
+    resized_button_images = []  # Lista para armazenar as imagens redimensionadas
+
+    for file_name in os.listdir(menu_path):
+        if file_name.endswith(".png"):
+            file_path = os.path.join(menu_path, file_name)
+            image = pygame.image.load(file_path).convert_alpha()
+            button_images.append(image)
+
+            resized_image = pygame.transform.scale2x(image)  # Aumenta o tamanho do botão em 2x
+            resized_button_images.append(resized_image)
+
+    return resized_button_images
