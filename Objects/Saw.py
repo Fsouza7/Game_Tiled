@@ -3,14 +3,14 @@ from Importations import *
 from Objects.Object import Object
 
 
-class Fire(Object):
+class Saw(Object):
     ANIMATION_DELAY = 5
 
     def __init__(self, x, y, width, height):
         from setup import load_sprite_sheets
-        super().__init__(x, y, width, height, "fire")
-        self.fire = load_sprite_sheets("Traps", "Fire", width, height)
-        self.image = self.fire["on"][0]
+        super().__init__(x, y, width, height, "saw")
+        self.saw = load_sprite_sheets("Traps", "Saw", width, height)
+        self.image = self.saw["on"][0]
         self.mask = pygame.mask.from_surface(self.image)
         self.animation_count = 0
         self.animation_name = "off"
@@ -22,7 +22,7 @@ class Fire(Object):
         self.animation_name = "off"
 
     def loop(self):
-        sprites = self.fire[self.animation_name]
+        sprites = self.saw[self.animation_name]
         sprite_index = (self.animation_count //
                         self.ANIMATION_DELAY) % len(sprites)
         self.image = sprites[sprite_index]

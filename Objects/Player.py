@@ -1,5 +1,7 @@
 from Importations import *
-
+import time
+from setup import load_sprite_sheets
+from settings import *
 
 class Player(pygame.sprite.Sprite):
 
@@ -9,10 +11,10 @@ class Player(pygame.sprite.Sprite):
     ANIMATION_DELAY = 3
 
     def __init__(self, x, y, width, height):
-        from setup import load_sprite_sheets
+
         super().__init__()
         self.rect = pygame.Rect(x, y, width, height)
-        self.SPRITES = load_sprite_sheets("MainCharacters", "VirtualGuy", 32, 32, True)
+
         self.x_vel = 0
         self.y_vel = 0
         self.mask = None
@@ -22,7 +24,10 @@ class Player(pygame.sprite.Sprite):
         self.jump_count = 0
         self.hit = False
         self.hit_count = 0
-        self.count_fruits = 0
+        self.count_fruits = 1
+        self.iniciar = False
+        if self.iniciar == 0:
+            self.SPRITES = load_sprite_sheets("MainCharacters", "PinkMan", 96, 96, True)
 
     def jump(self):
         self.y_vel = -self.GRAVITY * 8
@@ -38,7 +43,16 @@ class Player(pygame.sprite.Sprite):
     def make_hit(self):
         self.hit = True
 
-
+    def death(self,w):
+        death = + 1
+        print(f"voce morreu {death} vez")
+        level_image = pygame.image.load(join("assets/Menu/Text", f"game over.png"))
+        level_rect = level_image.get_rect()
+        level_rect.bottomright = (750, 300)
+        window.blit(level_image, level_rect)
+        pygame.display.update()
+        pygame.time.wait(300)
+        w(window)
 
     def move_left(self, vel):
         self.x_vel = -vel
@@ -55,16 +69,19 @@ class Player(pygame.sprite.Sprite):
     def eat_apple(self, apple):
         if pygame.sprite.collide_rect(self, apple):
                 self.count_fruits += 1
-
+                print(self.count_fruits)
 
     def eat_fruits(self):
         self.count_fruits += 1
         self.eat_fruit = True
+
         return self.count_fruits
+
 
     def loop(self, fps,apples):
         self.y_vel += min(1, (self.fall_count / fps) * self.GRAVITY)
-        self.move(self.x_vel, self.y_vel)
+        if self.iniciar == True:
+            self.move(self.x_vel, self.y_vel)
 
         self.eat_fruit = False
         for apple in apples:
@@ -91,18 +108,28 @@ class Player(pygame.sprite.Sprite):
         self.y_vel *= -1
 
     def update_sprite(self):
-        sprite_sheet = "idle"
-        if self.hit:
-            sprite_sheet = "hit"
-        elif self.y_vel < 0:
-            if self.jump_count == 1:
-                sprite_sheet = "jump"
-            elif self.jump_count == 2:
-                sprite_sheet = "double_jump"
-        elif self.y_vel > self.GRAVITY * 2:
-            sprite_sheet = "fall"
-        elif self.x_vel != 0:
-            sprite_sheet = "run"
+        if self.iniciar == False:
+            sprite_sheet = 'Appearing (96x96)'
+
+            if self.animation_count == 30:
+                self.iniciar = True
+
+        else:
+            sprite_sheet = "idle"
+            self.SPRITES = load_sprite_sheets("MainCharacters", "PinkMan", 32, 32, True)
+            if self.hit:
+                sprite_sheet = "hit"
+            elif self.y_vel < 0:
+                if self.jump_count == 1:
+                    sprite_sheet = "jump"
+                elif self.jump_count == 2:
+                    sprite_sheet = "double_jump"
+            elif self.y_vel > self.GRAVITY * 2:
+                sprite_sheet = "fall"
+            elif self.x_vel != 0:
+                sprite_sheet = "run"
+
+
 
         sprite_sheet_name = sprite_sheet + "_" + self.direction
         sprites = self.SPRITES[sprite_sheet_name]

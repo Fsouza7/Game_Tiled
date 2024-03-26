@@ -1,12 +1,13 @@
 import pygame
 import os
 from Importations import *
-from Objects import Player, Block, Object, Fire, Fan, Fruits
+from Objects import Player, Block, Object, Fire, Fan, Fruits, Void,Saw
 from settings import *
 from Logics.Colisoes import *
 from Logics.Menu import *
 
-offset_x = 0
+
+offset_x = 300
 scroll_area_width = 800
 
 pygame.init()
@@ -23,7 +24,9 @@ def draw(window, background, bg_image, player, objects, offset_x):
     player.draw(window, offset_x)
 
     # Colocar imagem no canto inferior
-    level_image = pygame.image.load(join("assets/Menu/Levels", "01.png"))
+    if player.count_fruits > 10:
+       pass
+    level_image = pygame.image.load(join("assets/Menu/Levels", f"1.png"))
     level_rect = level_image.get_rect()
     level_rect.bottomright = (WIDTH, 25)
     window.blit(level_image, level_rect)
@@ -48,12 +51,14 @@ def main(window):
     global player, fire
     global offset_x
     clock = pygame.time.Clock()
-    background, bg_image = get_background("Yellow.png")
+    background, bg_image = get_background("Pink.png")
     resized_button_images = load_button_images()
+    offset_x = 300
     block_size = 66
     apples.clear()
     fires.clear()
     objects.clear()
+    fans.clear()
     for row_index, row in enumerate(level_map):
         for col_index, cell in enumerate(row):
             x = col_index * block_size
@@ -62,19 +67,37 @@ def main(window):
             if cell == "x":
                 block = Block.Block(x, y, block_size, "terra")
                 objects.append(block)
+
             elif cell == "p":
                 player = Player.Player(x, y, 50, 50)
+
             elif cell == "m":
                 apple = Fruits.Apple(x, y, 32, 32)
                 objects.append(apple)
                 apples.append(apple)
+
             elif cell == "f":
                 fire = Fire.Fire(x, y, 16, 32)
                 objects.append(fire)
                 fires.append(fire)
+
             elif cell == "l":
                 block = Block.Block(x, y, block_size, "decor")
                 objects.append(block)
+
+            elif cell == "v":
+                fan = Fan.Fan(x, y, 24, 8)
+                objects.append(fan)
+                fans.append(fan)
+
+            elif cell == "d":
+                death = Void.Void(x,y,38,42)
+                objects.append(death)
+
+            elif cell == "s":
+                serra = Saw.Saw(x, y, 38, 42)
+                objects.append(serra)
+                serras.append(serra)
 
     run = True
     show_menu = False
@@ -97,7 +120,7 @@ def main(window):
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Clique do botão esquerdo do mouse
                     click_pos = pygame.mouse.get_pos()
-                    handle_menu_click(main(window), button_infos, click_pos)
+                    handle_menu_click(main, button_infos, click_pos)
 
         keys = pygame.key.get_pressed()
 
@@ -108,7 +131,15 @@ def main(window):
             for fir in fires:
                 fir.on()
                 fir.loop()
-            handle_move(player, objects)
+            for fan in fans:
+                fan.on()
+                fan.loop()
+            for serra in serras:
+                serra.on()
+                serra.loop()
+
+
+            handle_move(main, player, objects)
 
             if ((player.rect.right - offset_x >= WIDTH - scroll_area_width) and player.x_vel > 0) or (
                     (player.rect.left - offset_x <= scroll_area_width) and player.x_vel < 0):
@@ -119,6 +150,7 @@ def main(window):
         menu_clock.tick()
         if show_menu and is_paused:  # Exibir o menu somente quando estiver pausado
             menu_offset += 1
+            clock.tick(60)
             draw_menu(window, resized_button_images,menu_offset)
         pygame.display.flip()
 

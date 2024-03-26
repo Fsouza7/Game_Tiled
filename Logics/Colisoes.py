@@ -1,6 +1,6 @@
 
 from settings import *
-
+clock = pygame.time.Clock()
 
 
 
@@ -9,12 +9,15 @@ def handle_vertical_collision(player, objects, dy):
     for obj in objects:
         if pygame.sprite.collide_rect(player, obj):
             if dy > 0:
+
                 if obj.name == "apple":
                     # Ignora a colisão com a maçã
                     continue
+
                 player.rect.bottom = obj.rect.top
                 player.landed()
             elif dy < 0:
+
                 if obj.name == "apple":
                     # Ignora a colisão com a maçã
                     continue
@@ -34,7 +37,10 @@ def collide(player, objects, dx):
         if pygame.sprite.collide_rect(player, obj):
             if obj.name == "apple":
                 # Ignora a colisão com a maçã
+
+
                 continue
+
             collided_object = obj
             break
 
@@ -43,7 +49,7 @@ def collide(player, objects, dx):
     return collided_object
 
 
-def handle_move(player, objects):
+def handle_move(w, player, objects):
     keys = pygame.key.get_pressed()
 
     player.x_vel = 0
@@ -60,5 +66,20 @@ def handle_move(player, objects):
     for obj in to_check:
         if obj and obj.name == "fire":
             player.make_hit()
+            player.death(w)
+
         if obj and obj.name == "fan":
             player.make_hit()
+            player.death(w)
+
+        if obj and obj.name == "death":
+            print("GAME OVER")
+            player.death(w)
+
+        if obj and obj.name == "saw":
+            player.death(w)
+
+
+
+
+

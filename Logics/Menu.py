@@ -43,12 +43,14 @@ def handle_menu_click(w,button_infos, click_pos):
     for button_info in button_infos:
         if button_info['rect'].collidepoint(click_pos):
             button_index = button_info['index']
+            print("Botão", button_index, "clicado")
             if button_index == 4:
-                show_menu = w
+                print("Botão", button_index, "clicado")
+                show_menu = w(window)
                 if show_menu:
                     # Reiniciar o loop principal
                     continue
-            print("Botão", button_index, "clicado")
+
             return
 
 
