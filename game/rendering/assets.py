@@ -32,6 +32,7 @@ from game.world.tile_registry import (
     JUNGLE_STONE_ID, TOPAZ_ORE_ID, SAPPHIRE_ORE_ID, EMERALD_ORE_ID,
     BUSH_ID, SPIKES_ID, TRAMPOLINE_ID, FAN_ID, TRAP_SAND_ID, TRAP_MUD_ID,
     TRAP_ICE_ID, CRUMBLE_PLATFORM_ID, CHECKPOINT_ID, FURNACE_ID, CHEST_ID,
+    PERSONAL_CHEST_ID,
 )
 from game.entities import character_registry
 from game.world import hazard_feature
@@ -60,6 +61,7 @@ BACKGROUND_PATH = os.path.join("assets", "Background", "Blue.png")
 
 CRATE_TEXTURE_PATH = os.path.join("assets", "Items", "Boxes", "Box1", "Idle.png")
 CHEST_TEXTURE_PATH = os.path.join("assets", "Items", "Boxes", "Box2", "Idle.png")
+PERSONAL_CHEST_TEXTURE_PATH = os.path.join("assets", "Items", "Boxes", "Box3", "Idle.png")
 SPIKES_TEXTURE_PATH = os.path.join("assets", "Traps", "Spikes", "Idle.png")
 TRAMPOLINE_TEXTURE_PATH = os.path.join("assets", "Traps", "Trampoline", "Idle.png")
 FAN_ON_PATH = os.path.join("assets", "Traps", "Fan", "on.png")
@@ -81,7 +83,51 @@ SHADOW_PATH = os.path.join("assets", "Other", "Shadow.png")
 CONFETTI_PATH = os.path.join("assets", "Other", "Confetti (16x16).png")
 CONFETTI_CELL = 16
 
-MENU_BUTTONS_DIR = os.path.join("assets", "Menu", "Buttons", "Menu_jogo")
+ENEMIES_DIR = os.path.join("assets", "Enemies")
+BAT_PATH = os.path.join(ENEMIES_DIR, "Bat.png")
+BAT_CELL = 48  # 240x192 = 5 x 4 cells -- almost-static poses, unused
+MINI_BAT_PATH = os.path.join(ENEMIES_DIR, "mini bat.png")
+MINI_BAT_CELL = 32  # 224x128 = 7 x 4 cells; row 0 hover, row 1 dive
+SLIME_IDLE_PATH = os.path.join(ENEMIES_DIR, "Mini_Slime_Idle.png")
+SLIME_WALK_PATH = os.path.join(ENEMIES_DIR, "Mini_Slime_Walk.png")
+SLIME_HURT_PATH = os.path.join(ENEMIES_DIR, "Mini_Slime_Hurt.png")
+SLIME_FRAME = 32
+SCORPION_DIR = os.path.join(ENEMIES_DIR, "Scorpian")
+SCORPION_IDLE_PATH = os.path.join(SCORPION_DIR, "Idel.png")
+SCORPION_WALK_PATH = os.path.join(SCORPION_DIR, "Walk.png")
+SCORPION_ATTACK_PATH = os.path.join(SCORPION_DIR, "Attack.png")
+SCORPION_FRAME = 32
+DUSKWING_SPRITE_SIZE = 64  # 2x the 32px mini-bat cells, keeps the flap crisp
+SLIME_SPRITE_SIZE = 48
+SLIME_KING_SPRITE_SIZE = 96
+
+FLYING_HEAD_PATH = os.path.join("assets", "flying-head.png")
+FLYING_HEAD_CELL = 64  # 768x320 sheet = 12 x 5 cells
+IRON_GUARDIAN_SPRITE_SIZE = 64
+SCORPION_SPRITE_SIZE = 48
+
+# --- UI reskin (user-supplied pack in assets/validar/UI, a top-down
+# survival asset pack). The character/enemy/nature art in that pack is
+# top-down and thematically a zombie shooter, so none of it fits this
+# side-view fantasy-mining game -- see README "How the UI theme works" --
+# but its UI chrome (health bar, wood-plank buttons, panel frames, item
+# slots) is plain 2D art with no perspective to clash, so it reskins every
+# panel/button/slot in the game. ---
+_VALIDAR_UI_DIR = os.path.join("assets", "validar", "UI")
+HP_BAR_FRAME_PATH = os.path.join(_VALIDAR_UI_DIR, "HP", "HP-Bar.png")
+HP_BAR_FILL_PATH = os.path.join(_VALIDAR_UI_DIR, "HP", "HP.png")
+UI_PANEL_TEXTURE_PATH = os.path.join(_VALIDAR_UI_DIR, "Inventory", "Inventory_1.png")
+UI_CELL_TEXTURE_PATH = os.path.join(_VALIDAR_UI_DIR, "Inventory", "Inventory-Cell.png")
+UI_CELL_CHOSEN_TEXTURE_PATH = os.path.join(_VALIDAR_UI_DIR, "Inventory", "Inventory-Chosen.png")
+_UI_BUTTON_DIR = os.path.join(_VALIDAR_UI_DIR, "Menu", "Main Menu")
+_UI_BUTTON_FILES = {
+    "play": ("Play_Not-Pressed.png", "Play_Pressed.png"),
+    "load": ("Load_Not-Pressed.png", "Load_Pressed.png"),
+    "save": ("Save_Not-Pressed.png", "Save_Pressed.png"),
+    "settings": ("Settings_Not-Pressed.png", "Settings_Pressed.png"),
+    "quit": ("Quit_Not-Pressed.png", "Quit_Pressed.png"),
+    "blank": ("Blank_Not-Pressed.png", "Blank_Pressed.png"),
+}
 
 _FRUITS_DIR = os.path.join("assets", "Items", "Fruits")
 
@@ -200,6 +246,11 @@ def load_tile_textures() -> Dict[int, pygame.Surface]:
     # read as "different from a crate" at a glance.
     chest_sheet = pygame.image.load(CHEST_TEXTURE_PATH).convert_alpha()
     textures[CHEST_ID] = pygame.transform.scale(chest_sheet, (TILE_SIZE, TILE_SIZE))
+
+    # Personal Chest: Box3, the remaining box in the pack, so it doesn't
+    # read as the world-loot Chest (Box2) or the decorative crate (Box1).
+    personal_chest_sheet = pygame.image.load(PERSONAL_CHEST_TEXTURE_PATH).convert_alpha()
+    textures[PERSONAL_CHEST_ID] = pygame.transform.scale(personal_chest_sheet, (TILE_SIZE, TILE_SIZE))
 
     # Torch: no source art at all (procedural, transparent background) --
     # a slim stick with a flame, not a full block, since it's a mounted
@@ -390,39 +441,29 @@ def load_shadow_texture() -> pygame.Surface:
     return pygame.image.load(SHADOW_PATH).convert_alpha()
 
 
-def load_menu_button_icons() -> Dict[str, pygame.Surface]:
-    names = {"play": "Play.png", "settings": "Settings.png", "restart": "Restart.png", "close": "Close.png", "back": "Back.png"}
-    icons = {key: pygame.image.load(os.path.join(MENU_BUTTONS_DIR, filename)).convert_alpha() for key, filename in names.items()}
-    # No Save/Load art exists in the pack (Phase 7) -- hand-drawn vector
-    # icons, same precedent as _build_procedural_icons uses for missing
-    # tool/weapon art.
-    icons["save"] = _build_save_icon()
-    icons["load"] = _build_load_icon()
-    return icons
-
-
-def _build_save_icon(size: int = 32) -> pygame.Surface:
-    """A floppy disk: body outline, a notched top-right corner, a metal
-    slider near the top, a label rectangle near the bottom."""
-    surf = pygame.Surface((size, size), pygame.SRCALPHA)
-    color = (220, 220, 225)
-    body = pygame.Rect(size * 0.15, size * 0.12, size * 0.7, size * 0.76)
-    pygame.draw.rect(surf, color, body, width=3, border_radius=3)
-    pygame.draw.rect(surf, color, (size * 0.35, size * 0.16, size * 0.3, size * 0.2))
-    pygame.draw.rect(surf, color, (size * 0.28, size * 0.55, size * 0.44, size * 0.28), width=2)
-    return surf
-
-
-def _build_load_icon(size: int = 32) -> pygame.Surface:
-    """A downward arrow into a tray: the classic "load/import" glyph."""
-    surf = pygame.Surface((size, size), pygame.SRCALPHA)
-    color = (220, 220, 225)
-    pygame.draw.line(surf, color, (size * 0.5, size * 0.1), (size * 0.5, size * 0.55), width=4)
-    pygame.draw.polygon(surf, color, [
-        (size * 0.3, size * 0.45), (size * 0.7, size * 0.45), (size * 0.5, size * 0.72),
-    ])
-    pygame.draw.line(surf, color, (size * 0.18, size * 0.85), (size * 0.82, size * 0.85), width=4)
-    return surf
+def load_ui_theme() -> Dict[str, object]:
+    """The validar-pack reskin's raw art, loaded once. `panel` and `cell`/
+    `cell_chosen` are 9-sliceable/scalable frames (see Renderer.
+    _draw_nine_slice) -- everything else is drawn at native size and
+    scaled as a whole. `hp_bar_fill_track` is the (x, y, w, h) rect within
+    `hp_bar_frame`, in the frame's own native pixels, where the proportional
+    fill strip belongs -- measured directly from the source art's alpha
+    channel (the frame's hollow interior), not guessed."""
+    buttons = {}
+    for key, (not_pressed, pressed) in _UI_BUTTON_FILES.items():
+        buttons[key] = (
+            pygame.image.load(os.path.join(_UI_BUTTON_DIR, not_pressed)).convert_alpha(),
+            pygame.image.load(os.path.join(_UI_BUTTON_DIR, pressed)).convert_alpha(),
+        )
+    return {
+        "hp_bar_frame": pygame.image.load(HP_BAR_FRAME_PATH).convert_alpha(),
+        "hp_bar_fill": pygame.image.load(HP_BAR_FILL_PATH).convert_alpha(),
+        "hp_bar_fill_track": (13, 4, 40, 4),
+        "panel": pygame.image.load(UI_PANEL_TEXTURE_PATH).convert_alpha(),
+        "cell": pygame.image.load(UI_CELL_TEXTURE_PATH).convert_alpha(),
+        "cell_chosen": pygame.image.load(UI_CELL_CHOSEN_TEXTURE_PATH).convert_alpha(),
+        "buttons": buttons,
+    }
 
 
 def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
@@ -438,6 +479,9 @@ def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
     for item_id, head_color, handle_color in (
         ("wood_pickaxe", (150, 110, 65), (100, 70, 40)),
         ("stone_pickaxe", (150, 150, 158), (100, 70, 40)),
+        ("iron_pickaxe", (190, 190, 198), (100, 70, 40)),
+        ("steel_pickaxe", (150, 160, 175), (100, 70, 40)),
+        ("arcane_pickaxe", (170, 120, 230), (90, 70, 130)),
     ):
         surf = new_surface()
         pygame.draw.line(surf, handle_color, (size * 0.25, size * 0.85), (size * 0.75, size * 0.2), width=4)
@@ -455,26 +499,49 @@ def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
     pygame.draw.line(surf, (90, 65, 35), (size * 0.5, size * 0.65), (size * 0.5, size * 0.9), width=4)
     icons["wood_sword"] = surf
 
-    # Wood helmet: a simple dome, wood-toned.
-    surf = new_surface()
-    pygame.draw.arc(
-        surf, (150, 110, 65),
-        pygame.Rect(size * 0.15, size * 0.25, size * 0.7, size * 0.6),
-        start_angle=3.14159, stop_angle=6.28318, width=7,
-    )
-    pygame.draw.line(surf, (150, 110, 65), (size * 0.15, size * 0.55), (size * 0.85, size * 0.55), width=5)
-    icons["wood_helmet"] = surf
+    # Armor sets: same silhouette per slot, tinted by tier. No dedicated
+    # armor art exists in the pack.
+    def draw_armor_set(prefix, color, dark):
+        surf = new_surface()
+        pygame.draw.arc(
+            surf, color,
+            pygame.Rect(size * 0.15, size * 0.25, size * 0.7, size * 0.6),
+            start_angle=3.14159, stop_angle=6.28318, width=7,
+        )
+        pygame.draw.line(surf, color, (size * 0.15, size * 0.55), (size * 0.85, size * 0.55), width=5)
+        icons[f"{prefix}_helmet"] = surf
 
-    # Wood armor: a chestpiece silhouette (torso + shoulder studs).
-    surf = new_surface()
-    pygame.draw.polygon(surf, (150, 110, 65), [
-        (size * 0.5, size * 0.12), (size * 0.82, size * 0.28), (size * 0.72, size * 0.9),
-        (size * 0.28, size * 0.9), (size * 0.18, size * 0.28),
-    ])
-    pygame.draw.circle(surf, (100, 70, 40), (int(size * 0.28), int(size * 0.3)), int(size * 0.08))
-    pygame.draw.circle(surf, (100, 70, 40), (int(size * 0.72), int(size * 0.3)), int(size * 0.08))
-    pygame.draw.line(surf, (100, 70, 40), (size * 0.5, size * 0.2), (size * 0.5, size * 0.85), width=2)
-    icons["wood_armor"] = surf
+        surf = new_surface()
+        pygame.draw.polygon(surf, color, [
+            (size * 0.5, size * 0.12), (size * 0.82, size * 0.28), (size * 0.72, size * 0.9),
+            (size * 0.28, size * 0.9), (size * 0.18, size * 0.28),
+        ])
+        pygame.draw.circle(surf, dark, (int(size * 0.28), int(size * 0.3)), int(size * 0.08))
+        pygame.draw.circle(surf, dark, (int(size * 0.72), int(size * 0.3)), int(size * 0.08))
+        pygame.draw.line(surf, dark, (size * 0.5, size * 0.2), (size * 0.5, size * 0.85), width=2)
+        icons[f"{prefix}_armor"] = surf
+
+        surf = new_surface()
+        pygame.draw.rect(surf, color, pygame.Rect(size * 0.18, size * 0.15, size * 0.26, size * 0.7), border_radius=3)
+        pygame.draw.rect(surf, color, pygame.Rect(size * 0.56, size * 0.15, size * 0.26, size * 0.7), border_radius=3)
+        pygame.draw.line(surf, dark, (size * 0.31, size * 0.2), (size * 0.31, size * 0.8), width=2)
+        pygame.draw.line(surf, dark, (size * 0.69, size * 0.2), (size * 0.69, size * 0.8), width=2)
+        icons[f"{prefix}_greaves"] = surf
+
+        surf = new_surface()
+        pygame.draw.rect(surf, color, pygame.Rect(size * 0.12, size * 0.4, size * 0.3, size * 0.4), border_radius=2)
+        pygame.draw.rect(surf, color, pygame.Rect(size * 0.58, size * 0.4, size * 0.3, size * 0.4), border_radius=2)
+        pygame.draw.rect(surf, dark, pygame.Rect(size * 0.12, size * 0.72, size * 0.38, size * 0.12), border_radius=2)
+        pygame.draw.rect(surf, dark, pygame.Rect(size * 0.58, size * 0.72, size * 0.38, size * 0.12), border_radius=2)
+        icons[f"{prefix}_boots"] = surf
+
+    for prefix, color, dark in (
+        ("wood", (150, 110, 65), (100, 70, 40)),
+        ("iron", (170, 170, 178), (110, 110, 120)),
+        ("steel", (120, 130, 145), (70, 80, 95)),
+        ("arcane", (150, 100, 210), (90, 50, 150)),
+    ):
+        draw_armor_set(prefix, color, dark)
 
     # Bow: a curved limb plus a taut string.
     surf = new_surface()
@@ -516,9 +583,11 @@ def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
     # swatch. No dedicated bar/ingot art exists in the pack.
     for item_id, base_color, highlight_color in (
         ("iron_bar", (170, 170, 178), (215, 215, 222)),
+        ("steel_bar", (120, 130, 145), (175, 185, 200)),
         ("topaz_bar", (210, 170, 60), (240, 205, 110)),
         ("sapphire_bar", (60, 100, 200), (110, 150, 235)),
         ("emerald_bar", (50, 160, 95), (100, 210, 140)),
+        ("arcane_bar", (140, 90, 210), (200, 160, 255)),
     ):
         surf = new_surface()
         pygame.draw.polygon(surf, base_color, [
@@ -542,15 +611,14 @@ def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
         pygame.draw.circle(surf, (250, 250, 245), (int(size * 0.63), int(size * 0.17)), int(size * 0.05))
         icons[item_id] = surf
 
-    # Iron Pickaxe: same shape as the wood/stone pickaxes above, iron-toned.
+    # Arcane Staff: shaft plus a faceted gem tip -- no dedicated art exists.
     surf = new_surface()
-    pygame.draw.line(surf, (100, 70, 40), (size * 0.25, size * 0.85), (size * 0.75, size * 0.2), width=4)
-    pygame.draw.arc(
-        surf, (190, 190, 198),
-        pygame.Rect(size * 0.35, size * 0.05, size * 0.55, size * 0.55),
-        start_angle=3.6, stop_angle=6.0, width=6,
-    )
-    icons["iron_pickaxe"] = surf
+    pygame.draw.line(surf, (90, 70, 130), (size * 0.28, size * 0.9), (size * 0.62, size * 0.32), width=4)
+    pygame.draw.polygon(surf, (170, 120, 230), [
+        (size * 0.62, size * 0.08), (size * 0.78, size * 0.28), (size * 0.62, size * 0.42), (size * 0.46, size * 0.28),
+    ])
+    pygame.draw.circle(surf, (230, 200, 255), (int(size * 0.58), int(size * 0.22)), int(size * 0.05))
+    icons["arcane_staff"] = surf
 
     # Grapple Hook: a taut rope line with a curved metal hook at the tip.
     surf = new_surface()
@@ -561,6 +629,13 @@ def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
         start_angle=0.6, stop_angle=4.4, width=5,
     )
     icons["grapple_hook"] = surf
+
+    # Coin: a gold disc with a lighter rim -- no coin art exists in the pack.
+    surf = new_surface()
+    pygame.draw.circle(surf, (210, 165, 40), (size // 2, size // 2), int(size * 0.38))
+    pygame.draw.circle(surf, (240, 210, 90), (size // 2, size // 2), int(size * 0.38), width=2)
+    pygame.draw.circle(surf, (250, 230, 140), (int(size * 0.42), int(size * 0.4)), int(size * 0.08))
+    icons["coin"] = surf
 
     return icons
 
@@ -607,3 +682,100 @@ def load_all_character_animations(target_size: int) -> Dict[str, Dict[Tuple[str,
 
 def load_background_tile() -> pygame.Surface:
     return pygame.image.load(BACKGROUND_PATH).convert_alpha()
+
+
+def _horizontal_strip(path: str, frame_w: int, frame_h: int = None) -> List[pygame.Surface]:
+    sheet = pygame.image.load(path).convert_alpha()
+    frame_h = frame_h or sheet.get_height()
+    count = sheet.get_width() // frame_w
+    return [_crop(sheet, i * frame_w, 0, frame_w, frame_h) for i in range(count)]
+
+
+def _grid_row(path: str, cell: int, row: int, count: int) -> List[pygame.Surface]:
+    sheet = pygame.image.load(path).convert_alpha()
+    return [_crop(sheet, col * cell, row * cell, cell, cell) for col in range(count)]
+
+
+def _scale_facing(frames: List[pygame.Surface], target_size: int) -> Dict[str, List[pygame.Surface]]:
+    scaled = [pygame.transform.scale(frame, (target_size, target_size)) for frame in frames]
+    return {
+        "right": scaled,
+        "left": [pygame.transform.flip(frame, True, False) for frame in scaled],
+    }
+
+
+def _animation_table(states: Dict[str, List[pygame.Surface]], target_size: int) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    table: Dict[Tuple[str, str], List[pygame.Surface]] = {}
+    for state, frames in states.items():
+        facing = _scale_facing(frames, target_size)
+        table[(state, "right")] = facing["right"]
+        table[(state, "left")] = facing["left"]
+    return table
+
+
+def load_duskwing_animations(target_size: int) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    """mini bat.png: row 0 cols 0-2 is a real wing flap (col 3 folds the
+    wings -- skip it). Row 1 is the diving chase. Bat.png's 48px sheet is
+    three near-identical poses so it reads as a frozen sprite."""
+    hover = _grid_row(MINI_BAT_PATH, MINI_BAT_CELL, 0, 3)
+    dive = _grid_row(MINI_BAT_PATH, MINI_BAT_CELL, 1, 4)
+    hit = [_tinted(hover[0], (255, 40, 40), 180)]
+    return _animation_table({"idle": hover, "chase": dive, "hit": hit}, target_size)
+
+
+def load_slime_animations(target_size: int) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    idle = _horizontal_strip(SLIME_IDLE_PATH, SLIME_FRAME)
+    walk = _horizontal_strip(SLIME_WALK_PATH, SLIME_FRAME)
+    hurt = _horizontal_strip(SLIME_HURT_PATH, SLIME_FRAME)
+    hit = [hurt[1]] if len(hurt) > 1 else hurt[:1]
+    return _animation_table({"idle": idle, "chase": walk, "hit": hit}, target_size)
+
+
+def load_scorpion_animations(target_size: int) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    idle = _horizontal_strip(SCORPION_IDLE_PATH, SCORPION_FRAME)
+    walk = _horizontal_strip(SCORPION_WALK_PATH, SCORPION_FRAME)
+    hit = _horizontal_strip(SCORPION_ATTACK_PATH, SCORPION_FRAME)
+    return _animation_table({"idle": idle, "chase": walk, "hit": hit}, target_size)
+
+
+def load_enemy_animations() -> Dict[str, Dict[Tuple[str, str], List[pygame.Surface]]]:
+    """Per-enemy-id tables from assets/Enemies. Crawler still has no art."""
+    return {
+        "duskwing": load_duskwing_animations(DUSKWING_SPRITE_SIZE),
+        "slime": load_slime_animations(SLIME_SPRITE_SIZE),
+        "slime_king": load_slime_animations(SLIME_KING_SPRITE_SIZE),
+        "scorpion": load_scorpion_animations(SCORPION_SPRITE_SIZE),
+    }
+
+
+def _sheet_with_black_as_transparent(path: str) -> pygame.Surface:
+    """flying-head.png is an 8-bit sheet on solid black, no alpha channel.
+    Punch exact black out so the sprite's silhouette isn't a black box."""
+    sheet = pygame.image.load(path).convert()
+    sheet.set_colorkey((0, 0, 0))
+    return sheet.convert_alpha()
+
+
+def load_iron_guardian_animations(target_size: int) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    """flying-head.png: row 0 is a slow flap (idle), row 2 a faster flap
+    (chase) -- no dedicated Iron Guardian art exists, and this sheet was
+    otherwise sitting unused (an older Duskwing pass moved to Bat.png
+    instead), so the Summoner's second-tier minion reuses it."""
+    sheet = _sheet_with_black_as_transparent(FLYING_HEAD_PATH)
+    cell = FLYING_HEAD_CELL
+
+    def row(index: int, count: int) -> List[pygame.Surface]:
+        return [_crop(sheet, col * cell, index * cell, cell, cell) for col in range(count)]
+
+    idle = row(0, 6)
+    chase = row(2, 9)
+    return _animation_table({"idle": idle, "chase": chase}, target_size)
+
+
+def load_summon_animations() -> Dict[str, Dict[Tuple[str, str], List[pygame.Surface]]]:
+    """Per-summon-id tables, same shape as load_enemy_animations. Twig
+    Sprite still has no art (falls back to Renderer._draw_summons' flat
+    glowing shape)."""
+    return {
+        "iron_guardian": load_iron_guardian_animations(IRON_GUARDIAN_SPRITE_SIZE),
+    }

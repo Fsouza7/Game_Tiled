@@ -4,6 +4,7 @@ adding one entry here (see README "Como criar um inimigo").
 from typing import Dict, List
 
 from game.entities.enemy_def import EnemyDef, AIType, SpawnTime
+from game.settings import SLIME_KING_MAX_HEALTH, SLIME_KING_CONTACT_DAMAGE, SLIME_KING_MOVE_SPEED, SLIME_KING_WIDTH_TILES, SLIME_KING_HEIGHT_TILES
 from game.world.biome_registry import DESERT_ID
 
 _ENEMIES: Dict[str, EnemyDef] = {}
@@ -49,6 +50,20 @@ _register(EnemyDef(
     width_tiles=0.9, height_tiles=0.6, color=(200, 150, 60),
     spawn_weight=0.4, biome_id=DESERT_ID,
     drop_item_id="cactus_fiber", drop_chance=0.5, drop_min=1, drop_max=2,
+))
+
+
+_register(EnemyDef(
+    id="slime_king", name="Slime King",
+    ai_type=AIType.BOSS,
+    max_health=SLIME_KING_MAX_HEALTH, contact_damage=SLIME_KING_CONTACT_DAMAGE, move_speed=SLIME_KING_MOVE_SPEED,
+    width_tiles=SLIME_KING_WIDTH_TILES, height_tiles=SLIME_KING_HEIGHT_TILES, color=(40, 130, 70),
+    # Never picked by EnemySpawner's weighted roll (spawn_weight=0.0 alone
+    # already guarantees that -- see _pick_weighted_enemy's ai_type filter
+    # in enemy_spawner.py for the belt-and-suspenders version). Only
+    # GameApp.try_summon_boss ever constructs one, from a Slime Core Idol.
+    spawn_weight=0.0,
+    drop_item_id="slime_king_core", drop_chance=1.0, drop_min=1, drop_max=1,
 ))
 
 

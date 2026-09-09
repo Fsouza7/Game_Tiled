@@ -27,10 +27,11 @@ class Summon(Entity):
         self.attack_cooldown_remaining = 0.0
 
         # Mutable per-instance stats, seeded from summon_def but free to
-        # diverge (same pattern as Enemy.health vs enemy_def.max_health)
-        # -- the Magic skill's level/tree bonuses scale these at cast
-        # time (see combat_system._try_summon_cast), the def stays the
-        # immutable template.
+        # diverge -- move_speed / attack_interval_s are still baked at
+        # cast from the Magic tree's Swift Familiar node. Damage is *not*:
+        # Magic's per-level multiplier is applied live in
+        # combat_system.resolve_summon_attacks so a Magic level-up mid-fight
+        # is visible on the next hit without recasting the rod.
         self.damage = summon_def.damage
         self.move_speed = summon_def.move_speed
         self.attack_interval_s = summon_def.attack_interval_s

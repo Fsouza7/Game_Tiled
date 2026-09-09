@@ -4,7 +4,7 @@ started-then-collected transaction instead of an instant craft."""
 from typing import Dict, List
 
 from game.crafting.smelt_recipe import SmeltRecipeDef
-from game.settings import SMELT_TIME_IRON_S, SMELT_TIME_GEM_S
+from game.settings import SMELT_TIME_IRON_S, SMELT_TIME_STEEL_S, SMELT_TIME_GEM_S
 
 _RECIPES: Dict[str, SmeltRecipeDef] = {}
 
@@ -21,6 +21,14 @@ _register(SmeltRecipeDef(
     fuel_item_id="coal", fuel_quantity=1,
     bar_item_id="iron_bar", bar_quantity=1,
     smelt_time_s=SMELT_TIME_IRON_S,
+))
+
+_register(SmeltRecipeDef(
+    id="steel_bar", name="Steel Bar",
+    ore_item_id="iron_bar", ore_quantity=2,
+    fuel_item_id="coal", fuel_quantity=2,
+    bar_item_id="steel_bar", bar_quantity=1,
+    smelt_time_s=SMELT_TIME_STEEL_S,
 ))
 
 _register(SmeltRecipeDef(

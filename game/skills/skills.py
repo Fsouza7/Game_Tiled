@@ -116,7 +116,7 @@ class Skills:
     # --- combat/gathering stat helpers (explicit per-node checks, no
     # generic "effect engine" -- matches this codebase's established style) ---
     def attack_damage_multiplier(self) -> float:
-        multiplier = 1.0 + ATTACK_DAMAGE_PCT_PER_LEVEL * self.level("attack")
+        multiplier = 1.0 + ATTACK_DAMAGE_PCT_PER_LEVEL * (self.level("attack") - 1)
         if self.has_node("attack_keen_edge"):
             multiplier += 0.10
         if self.has_node("attack_berserker"):
@@ -126,7 +126,7 @@ class Skills:
         return multiplier
 
     def magic_damage_multiplier(self) -> float:
-        multiplier = 1.0 + MAGIC_DAMAGE_PCT_PER_LEVEL * self.level("magic")
+        multiplier = 1.0 + MAGIC_DAMAGE_PCT_PER_LEVEL * (self.level("magic") - 1)
         if self.has_node("magic_empowered_bond"):
             multiplier += 0.15
         if self.has_node("magic_arcane_mastery"):

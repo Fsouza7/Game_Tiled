@@ -2,6 +2,7 @@
 melee/ranged attacks, projectiles, contact damage/knockback, and the enemy
 spawner's population cap.
 """
+import os
 import random
 
 import pygame  # noqa: F401
@@ -33,7 +34,7 @@ def _make_player_at(world, x_tile):
 
 def test_enemy_registry_has_the_expected_types():
     enemies = enemy_registry.all_enemies()
-    assert {e.id for e in enemies} == {"slime", "crawler", "duskwing", "scorpion"}
+    assert {e.id for e in enemies} == {"slime", "crawler", "duskwing", "scorpion", "slime_king"}
 
 
 def test_enemy_drops_reference_real_items():
@@ -355,6 +356,68 @@ def test_enemy_invulnerability_blocks_repeat_damage():
     assert enemy.health == enemy.enemy_def.max_health - 5.0
 
 
+def test_player_take_damage_queues_a_popup_at_the_hit_not_after_respawn():
+    from game.rendering.damage_numbers import drain_popups
+
+    player = Player(120.0, 80.0)
+    hit_x, hit_y = player.center_x, player.y
+    player.take_damage(player.max_health + 25)  # lethal -- respawns at spawn
+    pops = drain_popups(player)
+    assert len(pops) == 1
+    x, y, amount = pops[0]
+    assert (x, y) == (hit_x, hit_y)
+    assert amount == player.max_health + 25
+    assert player.pending_damage_popups == []
+
+
+def test_enemy_i_frames_do_not_queue_a_second_popup():
+    from game.rendering.damage_numbers import drain_popups
+
+    enemy = Enemy(enemy_registry.get("slime"), 0, 0)
+    assert enemy.take_damage(5.0) is True
+    assert enemy.take_damage(5.0) is False
+    pops = drain_popups(enemy)
+    assert len(pops) == 1
+    assert pops[0][2] == 5.0
+
+
+def test_damage_numbers_rise_and_expire():
+    from game.rendering.damage_numbers import DamageNumbers
+    from game.settings import DAMAGE_POPUP_LIFETIME_S, DAMAGE_POPUP_RISE_PX_PER_S
+
+    numbers = DamageNumbers()
+    numbers.spawn(10.0, 50.0, 8.0, on_player=True)
+    assert len(numbers.popups) == 1
+    start_y = numbers.popups[0].y
+    numbers.update(0.2)
+    assert numbers.popups[0].y < start_y
+    assert abs((start_y - numbers.popups[0].y) - DAMAGE_POPUP_RISE_PX_PER_S * 0.2) < 0.01
+    numbers.update(DAMAGE_POPUP_LIFETIME_S)
+    assert numbers.popups == []
+
+
+def test_game_app_draws_player_and_enemy_hits():
+    from game.core.game_app import GameApp
+    from game.rendering.damage_numbers import drain_popups
+
+    app = GameApp(seed=DEFAULT_SEED)
+    try:
+        app.title_open = False
+        app.character_select_open = False
+        app.class_select_open = False
+        app.player.take_damage(4.0)
+        enemy = Enemy(enemy_registry.get("slime"), app.player.x + 40, app.player.y)
+        enemy.take_damage(9.0)
+        app.enemies.append(enemy)
+        app._harvest_damage_popups()
+        assert drain_popups(app.player) == []
+        assert {p.amount for p in app.damage_numbers.popups} == {4.0, 9.0}
+        assert {p.on_player for p in app.damage_numbers.popups} == {True, False}
+        app.step(dt=1 / 60)  # real draw path, including _draw_damage_numbers
+    finally:
+        pygame.quit()
+
+
 def test_roll_drop_matches_def_bounds():
     random.seed(42)
     enemy = Enemy(enemy_registry.get("slime"), 0, 0)
@@ -385,6 +448,20 @@ def test_spawner_respects_max_alive_cap():
         assert len(enemies) <= ENEMY_MAX_ALIVE
 
 
+def test_flying_enemies_spawn_above_the_ground():
+    from game.entities.enemy_spawner import _spawn_y_tiles
+
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    surface_y = world.surface_spawn_y(x) + 1
+    ground_air = surface_y - 1
+    slime_y = _spawn_y_tiles(world, x, enemy_registry.get("slime"))
+    bat_y = _spawn_y_tiles(world, x, enemy_registry.get("duskwing"))
+    assert slime_y == ground_air
+    assert bat_y < slime_y
+    assert not world.is_solid(x, bat_y)
+
+
 def test_spawner_despawns_far_enemies():
     world = World(DEFAULT_SEED)
     x = WORLD_WIDTH_TILES // 2
@@ -395,3 +472,53 @@ def test_spawner_despawns_far_enemies():
     enemies = [far_enemy]
     spawner.update(dt=0.0, world=world, player=player, enemies=enemies, is_night=False)
     assert far_enemy.alive is False
+
+
+def test_enemy_sprites_from_enemies_folder():
+    from game.rendering import assets
+    from game.settings import WINDOW_WIDTH, WINDOW_HEIGHT
+    from game.rendering.renderer import Renderer
+
+    pygame.init()
+    pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    assert os.path.isfile(assets.MINI_BAT_PATH)
+    assert os.path.isfile(assets.SLIME_IDLE_PATH)
+    assert os.path.isfile(assets.SCORPION_IDLE_PATH)
+
+    bat = assets.load_duskwing_animations(assets.DUSKWING_SPRITE_SIZE)
+    assert len(bat[("idle", "right")]) == 3
+    assert len(bat[("chase", "right")]) == 4
+    assert len(bat[("hit", "right")]) == 1
+
+    slime = assets.load_slime_animations(assets.SLIME_SPRITE_SIZE)
+    assert len(slime[("idle", "right")]) == 9
+    assert len(slime[("chase", "right")]) == 8
+    assert len(slime[("hit", "right")]) == 1
+
+    scorpion = assets.load_scorpion_animations(assets.SCORPION_SPRITE_SIZE)
+    assert len(scorpion[("idle", "right")]) == 3
+    assert len(scorpion[("chase", "right")]) == 3
+    assert len(scorpion[("hit", "right")]) == 3
+
+    idle = bat[("idle", "right")][0]
+    opaque = sum(
+        1
+        for y in range(0, idle.get_height(), 4)
+        for x in range(0, idle.get_width(), 4)
+        if idle.get_at((x, y))[3] > 0
+    )
+    assert opaque > 5
+
+    renderer = Renderer()
+    assert set(renderer.enemy_animations) >= {"duskwing", "slime", "slime_king", "scorpion"}
+    bat_enemy = Enemy(enemy_registry.get("duskwing"), 0, 0)
+    assert renderer._enemy_animation_state(bat_enemy) == "idle"
+    bat_enemy.x_vel = bat_enemy.enemy_def.move_speed
+    assert renderer._enemy_animation_state(bat_enemy) == "chase"
+    bat_enemy.invulnerability_remaining = 0.1
+    assert renderer._enemy_animation_state(bat_enemy) == "hit"
+
+    slime = Enemy(enemy_registry.get("slime"), 0, 0)
+    assert renderer._enemy_animation_state(slime) == "idle"
+    slime.x_vel = slime.enemy_def.move_speed
+    assert renderer._enemy_animation_state(slime) == "chase"

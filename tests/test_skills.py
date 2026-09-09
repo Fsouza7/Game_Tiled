@@ -168,7 +168,7 @@ def test_try_unlock_node_fails_without_the_prior_tier_unlocked():
 def test_attack_damage_multiplier_baseline_and_with_nodes():
     skills = Skills()
     baseline = skills.attack_damage_multiplier()
-    assert baseline > 1.0  # level-1 passive is still a nonzero base multiplier
+    assert baseline == 1.0  # level 1 is a true 1.0x; bonuses start at level 2
 
     skills.add_xp("attack", xp_table.LEVEL_XP_TABLE[30])
     skills.try_unlock_node("attack_keen_edge")
@@ -350,23 +350,48 @@ def test_summon_hit_grants_magic_and_hitpoints_xp():
     assert player.skills.xp("hitpoints") > 0.0
 
 
-def test_magic_level_multiplier_boosts_summon_damage_at_cast_time():
-    from game.combat.combat_system import _try_summon_cast
+def test_magic_level_boosts_summon_damage_live_without_recasting():
+    """Magic's per-level bonus is applied on the hit, not baked into
+    Summon.damage at cast -- otherwise leveling Magic mid-fight (the
+    thing a Summoner actually does) would look like a no-op until they
+    recast the rod."""
     from game.items import item_registry
+    from game.settings import MAGIC_DAMAGE_PCT_PER_LEVEL
 
     world = World(DEFAULT_SEED)
     x = WORLD_WIDTH_TILES // 2
-    player = Player(x * TILE_SIZE, world.surface_spawn_y(x) * TILE_SIZE, class_id="summoner")
+    air_y = (world.surface_spawn_y(x) - 6) * TILE_SIZE
+    player = Player(x * TILE_SIZE, air_y, class_id="summoner")
     item_def = item_registry.get("summon_rod_wood")
     base_damage = summon_registry.get(item_def.summons_id).damage
 
-    summon = _try_summon_cast(player, item_def)
-    assert summon.damage >= base_damage  # level 1, no nodes -> baseline-ish multiplier
+    summon = combat_system._try_summon_cast(player, item_def)
+    assert summon.damage == base_damage  # not pre-multiplied
+    assert player.skills.magic_damage_multiplier() == 1.0
 
-    player.skills.add_xp("magic", xp_table.LEVEL_XP_TABLE[30])
+    # Overlap the crawler on the summon so range isn't what we're testing.
+    enemy = Enemy(enemy_registry.get("crawler"), summon.center_x, summon.center_y)
+    start_health = enemy.health
+    combat_system.resolve_summon_attacks(player, [summon], [enemy])
+    first_hit = start_health - enemy.health
+    assert first_hit == base_damage
+
+    player.skills.add_xp("magic", xp_table.LEVEL_XP_TABLE[10])
+    assert player.skills.level("magic") == 10
+    expected = base_damage * (1.0 + MAGIC_DAMAGE_PCT_PER_LEVEL * 9)
+    enemy2 = Enemy(enemy_registry.get("crawler"), summon.center_x, summon.center_y)
+    summon.attack_cooldown_remaining = 0.0
+    combat_system.resolve_summon_attacks(player, [summon], [enemy2])
+    second_hit = enemy2.enemy_def.max_health - enemy2.health
+    assert abs(second_hit - expected) < 0.01
+    assert second_hit > first_hit
+
     player.skills.try_unlock_node("magic_empowered_bond")
-    boosted_summon = _try_summon_cast(player, item_def)
-    assert boosted_summon.damage > summon.damage
+    enemy3 = Enemy(enemy_registry.get("crawler"), summon.center_x, summon.center_y)
+    summon.attack_cooldown_remaining = 0.0
+    combat_system.resolve_summon_attacks(player, [summon], [enemy3])
+    node_hit = enemy3.enemy_def.max_health - enemy3.health
+    assert node_hit > second_hit
 
 
 # --- Defense XP ---
@@ -477,6 +502,7 @@ def test_game_app_announces_level_ups_and_skills_screen_interaction():
 
     app = GameApp(seed=DEFAULT_SEED)
     try:
+        app.title_open = False
         app.character_select_open = False
         app.class_select_open = False
 

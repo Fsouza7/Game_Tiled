@@ -5,6 +5,8 @@ import math
 from typing import List, Optional, Tuple, Union
 
 from game.combat.projectile import Projectile
+from game.combat.enemy_projectile import EnemyProjectile
+from game.entities.boss import Boss
 from game.entities.enemy import Enemy
 from game.entities.summon import Summon
 from game.entities import class_registry, summon_ai, summon_registry
@@ -15,7 +17,8 @@ from game.settings import (
     PROJECTILE_SPEED, PROJECTILE_GRAVITY_SCALE, GRAVITY, WORLD_WIDTH_TILES,
     WORLD_HEIGHT_TILES, PLAYER_HIT_INVULNERABILITY_S, MIN_DAMAGE_AFTER_DEFENSE,
     ATTACK_XP_PER_DAMAGE, ATTACK_KILL_BONUS_XP, MAGIC_XP_PER_DAMAGE,
-    DEFENSE_XP_PER_DAMAGE_TAKEN, HITPOINTS_XP_SHARE,
+    DEFENSE_XP_PER_DAMAGE_TAKEN, HITPOINTS_XP_SHARE, ENEMY_PROJECTILE_GRAVITY_SCALE,
+    SLIME_KING_STOMP_DAMAGE, SLIME_KING_STOMP_RADIUS_TILES,
 )
 from game.world.world import World
 from game.world import tile_registry
@@ -92,12 +95,11 @@ def try_attack(player, world: World, enemies: List[Enemy], aim_world_pos) -> Uni
 def _try_summon_cast(player, item_def) -> Optional[Summon]:
     """Casting a summon rod (re)summons its minion at the player's
     position, replacing any currently active summon -- see GameApp, which
-    owns `self.summons` and does the actual replacing. The Magic skill's
-    level/tree bonus is baked into the summon's per-instance stats here
-    (see Summon.damage/move_speed/attack_interval_s), not recomputed
-    live -- recasting a rod is already how a player "refreshes" a
-    summon's stats (e.g. after crafting a better rod), so this is
-    consistent, not a new mechanic."""
+    owns `self.summons` and does the actual replacing. Magic's per-level
+    damage bonus is applied live on each hit (resolve_summon_attacks),
+    so a Magic level-up is visible without recasting. Swift Familiar's
+    speed/interval bonus is still baked here -- recasting a rod is the
+    natural refresh for that node."""
     player.attack_cooldown_remaining = 1.0 / max(0.1, item_def.speed)
     summon_def = summon_registry.get(item_def.summons_id)
     # Summon(x, y) takes a top-left corner like every other Entity -- center
@@ -105,7 +107,10 @@ def _try_summon_cast(player, item_def) -> Optional[Summon]:
     spawn_x = player.center_x - (summon_def.width_tiles * TILE_SIZE) / 2
     spawn_y = player.center_y - (summon_def.height_tiles * TILE_SIZE) / 2
     summon = Summon(summon_def, spawn_x, spawn_y)
-    summon.damage *= player.skills.magic_damage_multiplier()
+    # Damage is applied live (see resolve_summon_attacks) so Magic
+    # level-ups register on the next hit without recasting. Speed/interval
+    # stay baked here -- they're a Swift Familiar node effect, not the
+    # per-level curve, and recasting a rod is the natural "refresh".
     if player.skills.has_node("magic_swift_familiar"):
         summon.move_speed *= 1.2
         summon.attack_interval_s *= 0.85
@@ -144,17 +149,23 @@ def _try_melee_attack(player, item_def, enemies: List[Enemy], aim_dx: float, aim
 
 
 def _try_ranged_attack(player, item_def, aim_dx: float, aim_dy: float) -> Optional[Projectile]:
-    if item_def.ammo_item_id is None or player.inventory.count_item(item_def.ammo_item_id) <= 0:
-        return None
+    if item_def.ammo_item_id is not None:
+        if player.inventory.count_item(item_def.ammo_item_id) <= 0:
+            return None
+        player.inventory.remove_item(item_def.ammo_item_id, 1)
 
-    player.inventory.remove_item(item_def.ammo_item_id, 1)
     player.attack_cooldown_remaining = 1.0 / max(0.1, item_def.speed)
-    effective_damage = item_def.damage * player.skills.attack_damage_multiplier()
+    if item_def.uses_magic:
+        effective_damage = item_def.damage * player.skills.magic_damage_multiplier()
+    else:
+        effective_damage = item_def.damage * player.skills.attack_damage_multiplier()
 
     return Projectile(
         player.center_x, player.center_y,
         PROJECTILE_SPEED * aim_dx, PROJECTILE_SPEED * aim_dy,
         effective_damage,
+        uses_magic=item_def.uses_magic,
+        affected_by_gravity=not item_def.uses_magic,
     )
 
 
@@ -162,7 +173,8 @@ def update_projectiles(player, projectiles: List[Projectile], world: World, enem
     survivors = []
     for projectile in projectiles:
         projectile.time_remaining -= dt
-        projectile.y_vel += GRAVITY * PROJECTILE_GRAVITY_SCALE
+        if projectile.affected_by_gravity:
+            projectile.y_vel += GRAVITY * PROJECTILE_GRAVITY_SCALE
         projectile.x += projectile.x_vel
         projectile.y += projectile.y_vel
 
@@ -180,9 +192,12 @@ def update_projectiles(player, projectiles: List[Projectile], world: World, enem
             if enemy.alive and projectile.rect.colliderect(enemy.rect):
                 if enemy.take_damage(projectile.damage):
                     _knockback_enemy(enemy, projectile.x)
-                    _grant_combat_xp(player, "attack", projectile.damage * ATTACK_XP_PER_DAMAGE)
+                    skill_id = "magic" if projectile.uses_magic else "attack"
+                    _grant_combat_xp(player, skill_id, projectile.damage * (
+                        MAGIC_XP_PER_DAMAGE if projectile.uses_magic else ATTACK_XP_PER_DAMAGE
+                    ))
                     if enemy.defeated:
-                        _grant_combat_xp(player, "attack", ATTACK_KILL_BONUS_XP)
+                        _grant_combat_xp(player, skill_id, ATTACK_KILL_BONUS_XP)
                 hit_enemy = True
                 break
         if hit_enemy:
@@ -206,11 +221,67 @@ def resolve_summon_attacks(player, summons: List[Summon], enemies: List[Enemy]) 
         target = summon_ai.nearest_enemy_in_range(summon.center_x, summon.center_y, enemies, summon_def.attack_range_tiles)
         if target is None:
             continue
-        if target.take_damage(summon.damage):
-            _grant_combat_xp(player, "magic", summon.damage * MAGIC_XP_PER_DAMAGE)
+        effective_damage = summon.damage * player.skills.magic_damage_multiplier()
+        if target.take_damage(effective_damage):
+            _grant_combat_xp(player, "magic", effective_damage * MAGIC_XP_PER_DAMAGE)
             if target.defeated:
                 _grant_combat_xp(player, "magic", ATTACK_KILL_BONUS_XP)
         summon.attack_cooldown_remaining = summon.attack_interval_s
+
+
+def update_enemy_projectiles(player, projectiles: List[EnemyProjectile], world: World, dt: float) -> List[EnemyProjectile]:
+    """The enemy-owned mirror of update_projectiles: moves each
+    EnemyProjectile (currently only the Slime King's Slime Lob -- see
+    boss_ai.py) and resolves it against the player instead of enemies."""
+    survivors = []
+    for projectile in projectiles:
+        projectile.time_remaining -= dt
+        projectile.y_vel += GRAVITY * ENEMY_PROJECTILE_GRAVITY_SCALE
+        projectile.x += projectile.x_vel
+        projectile.y += projectile.y_vel
+
+        if projectile.time_remaining <= 0:
+            continue
+        if not (0 <= projectile.x < WORLD_WIDTH_TILES * TILE_SIZE and 0 <= projectile.y < WORLD_HEIGHT_TILES * TILE_SIZE):
+            continue
+
+        tile_x, tile_y = int(projectile.center_x // TILE_SIZE), int(projectile.center_y // TILE_SIZE)
+        if world.is_solid(tile_x, tile_y):
+            continue
+
+        if player.alive and not player.is_invulnerable() and projectile.rect.colliderect(player.rect):
+            damage = max(MIN_DAMAGE_AFTER_DEFENSE, projectile.damage - player_total_defense(player))
+            player.take_damage(damage)
+            player.invulnerability_remaining = PLAYER_HIT_INVULNERABILITY_S
+            _grant_combat_xp(player, "defense", damage * DEFENSE_XP_PER_DAMAGE_TAKEN)
+            _knockback_player(player, projectile.x)
+            continue
+
+        survivors.append(projectile)
+    return survivors
+
+
+def resolve_boss_stomp(player, enemies: List[Enemy]) -> None:
+    """Slime King's phase-3 landing shockwave: unlike ordinary contact
+    damage (which needs a direct hitbox overlap), a stomp hits the player
+    within SLIME_KING_STOMP_RADIUS_TILES even without one -- see
+    boss_ai.py setting Boss.stomp_pending on landing. The flag is cleared
+    here every call regardless of whether it actually connects, so a
+    single landing can never fire twice."""
+    for enemy in enemies:
+        if not isinstance(enemy, Boss) or not enemy.stomp_pending:
+            continue
+        enemy.stomp_pending = False
+        if not player.alive or player.is_invulnerable():
+            continue
+        distance_tiles = ((player.center_x - enemy.center_x) ** 2 + (player.center_y - enemy.center_y) ** 2) ** 0.5 / TILE_SIZE
+        if distance_tiles > SLIME_KING_STOMP_RADIUS_TILES:
+            continue
+        damage = max(MIN_DAMAGE_AFTER_DEFENSE, SLIME_KING_STOMP_DAMAGE - player_total_defense(player))
+        player.take_damage(damage)
+        player.invulnerability_remaining = PLAYER_HIT_INVULNERABILITY_S
+        _grant_combat_xp(player, "defense", damage * DEFENSE_XP_PER_DAMAGE_TAKEN)
+        _knockback_player(player, enemy.center_x)
 
 
 def resolve_contact_damage(player, enemies: List[Enemy]) -> None:

@@ -16,7 +16,11 @@ summons_id names which SummonDef a summon rod casts (see summon_registry.py).
 A later pass added the ACCESSORY category and accessory_kind: an
 accessory is an equip_slot="accessory" item that's actively *used* (E)
 rather than a passive stat stick -- accessory_kind names which behavior
-(e.g. "grapple_hook") Player.try_use_accessory dispatches to.
+(e.g. "grapple_hook") Player.try_use_accessory dispatches to. Phase 9
+added light_emit (worn light), fortune_chance (extra mining drops) and
+uses_magic (damage/XP through the Magic skill, ammo-free bolts). Phase 10
+added summons_boss_id: a boss idol (CONSUMABLE) used with G to spawn its
+boss (see GameApp.try_summon_boss, Player.use_selected_summon_item).
 """
 from dataclasses import dataclass
 from enum import Enum
@@ -82,6 +86,14 @@ class ItemDef:
     equip_slot: Optional[str] = None  # e.g. "head"/"body"/"accessory" -- which Equipment slot this fits
     defense: float = 0.0  # flat damage reduction while equipped
     accessory_kind: Optional[str] = None  # e.g. "grapple_hook" -- which active behavior E triggers, accessories only
+    light_emit: int = 0  # 0-15, same scale as TileDef.light_emit; equipped items light nearby tiles
+
+    # --- mining extras ---
+    fortune_chance: float = 0.0  # chance the selected tool grants a second copy of a mined drop
+
+    # --- combat extras ---
+    uses_magic: bool = False  # ranged/melee damage and XP use the Magic skill instead of Attack
 
     # --- consumable fields ---
     heal_amount: float = 0.0  # HP restored on eating; 0 = not edible
+    summons_boss_id: Optional[str] = None  # EnemyDef id this idol summons when used (see Player.use_selected_summon_item, bound to G), boss idols only

@@ -17,16 +17,16 @@ def _register(summon_def: SummonDef) -> None:
 
 _register(SummonDef(
     id="twig_sprite", name="Twig Sprite",
-    damage=2.0, attack_interval_s=1.2, move_speed=4.5,
+    damage=7.0, attack_interval_s=0.8, move_speed=5.0,
     width_tiles=0.6, height_tiles=0.6, color=(140, 210, 120),
-    attack_range_tiles=1.0, seek_radius_tiles=8.0, follow_distance_tiles=6.0,
+    attack_range_tiles=1.4, seek_radius_tiles=10.0, follow_distance_tiles=6.0,
 ))
 
 _register(SummonDef(
     id="iron_guardian", name="Iron Guardian",
-    damage=7.0, attack_interval_s=1.0, move_speed=5.5,
+    damage=14.0, attack_interval_s=0.7, move_speed=5.5,
     width_tiles=0.8, height_tiles=0.8, color=(180, 180, 190),
-    attack_range_tiles=1.2, seek_radius_tiles=10.0, follow_distance_tiles=6.0,
+    attack_range_tiles=1.6, seek_radius_tiles=12.0, follow_distance_tiles=6.0,
 ))
 
 

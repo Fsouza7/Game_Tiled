@@ -62,7 +62,7 @@ def test_only_starter_loadout_is_granted_by_default():
     # gathered/crafted -- confirm none of it is silently handed to the
     # player as a shortcut, even once it's obtainable elsewhere.
     player = Player(0, 0)
-    for item_id in ("wood", "wood_sword", "wood_helmet", "wood_armor", "apple"):
+    for item_id in ("wood", "wood_sword", "wood_helmet", "wood_armor", "apple", "coin"):
         assert player.inventory.count_item(item_id) == 0
     assert player.inventory.count_item("wood_pickaxe") == 1
     assert player.inventory.count_item("grapple_hook") == 0  # equipped, not in bag

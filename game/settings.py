@@ -122,6 +122,7 @@ SLIME_HOP_INTERVAL_MIN_S = 0.7
 SLIME_HOP_INTERVAL_MAX_S = 1.6
 FLYING_BOB_AMPLITUDE_TILES = 0.4
 FLYING_BOB_FREQUENCY = 2.0
+FLYING_SPAWN_HEIGHT_TILES = 5  # hover altitude above the grass, not perched on it
 # Once within this range while chasing, a flyer backs off instead of
 # camping directly on top of the player -- otherwise it deals contact
 # damage on nearly every frame it's in melee range, with no way to avoid it.
@@ -147,10 +148,14 @@ CRAFTING_XP_PER_SMELT = 9.0
 # A fraction of every Attack/Defense/Magic XP grant also goes to
 # Hitpoints, same as real RuneScape -- every combat skill trains survivability.
 HITPOINTS_XP_SHARE = 1.0 / 3.0
-HITPOINTS_HP_PER_LEVEL = 1.0
+HITPOINTS_HP_PER_LEVEL = 10.0
 # Per-level passive multipliers/bonuses (stack with the skill's tree nodes).
-ATTACK_DAMAGE_PCT_PER_LEVEL = 0.0075
-MAGIC_DAMAGE_PCT_PER_LEVEL = 0.009
+# `(level - 1)` so level 1 is a true 1.0x / 0-flat baseline and each
+# level-up is a chunk you can actually see (user playtest: 0.75%/0.9%
+# per level vanished into rounding on the floating damage numbers, and
+# +1 HP didn't register as a bigger health bar).
+ATTACK_DAMAGE_PCT_PER_LEVEL = 0.05
+MAGIC_DAMAGE_PCT_PER_LEVEL = 0.08
 MINING_POWER_PCT_PER_LEVEL = 0.015
 DEFENSE_FLAT_PER_LEVEL = 0.3
 CRAFTING_RESOURCEFUL_CHANCE = 0.15
@@ -164,6 +169,9 @@ TRAMPOLINE_BOUNCE_VELOCITY = 24.0
 INVENTORY_SLOTS = 20
 HOTBAR_SLOTS = 9
 DEFAULT_STACK_SIZE = 99
+# Shared stash accessed from any placed Personal Chest (piggy-bank /
+# ender-chest style -- contents follow the player, not the tile).
+PERSONAL_CHEST_SLOTS = 20
 
 # --- World clock (day/night) ---
 DAY_LENGTH_S = 600.0  # one full day+night cycle, real seconds
@@ -250,7 +258,12 @@ PARTICLE_CONFETTI_COUNT = 26
 
 # --- Furnace / smelting ---
 SMELT_TIME_IRON_S = 4.0
+SMELT_TIME_STEEL_S = 8.0  # iron bar re-smelted -- slower, next mining tier
 SMELT_TIME_GEM_S = 6.0  # topaz/sapphire/emerald -- rarer ore, slower burn
+
+# --- Magic-tier gear (crafted from an Arcane Bar = all three gem bars) ---
+ARCANE_PICKAXE_FORTUNE_CHANCE = 0.25
+ARCANE_HELM_LIGHT_EMIT = 12  # a bit under a torch (14), enough to mine without placing lights
 
 # --- On-screen notifications (recipe unlocks, blocked-mining messages) ---
 NOTIFICATION_DURATION_S = 2.5
@@ -266,6 +279,54 @@ STRUCTURE_MAX_TERRAIN_VARIANCE_TILES = 3  # skip a surface structure if the grou
 UNDERGROUND_ROOM_MIN_DEPTH_BELOW_SURFACE = 14
 RUINS_WALL_COLLAPSE_CHANCE = 0.35  # each Ruins wall tile independently has this chance to be missing
 
+# --- NPCs (Phase 8) ---
+# Interact radius is in tiles from player center to NPC center. Homes
+# prefer a world-generated House (see game/world/structures.py); Guide
+# stays near spawn so the first NPC is actually findable, Merchant/
+# Blacksmith can live farther out as an exploration reward.
+NPC_INTERACT_RANGE_TILES = 3.0
+NPC_GUIDE_MAX_HOUSE_DISTANCE_TILES = 80
+NPC_HOME_SEARCH_MAX_DISTANCE_TILES = 400
+# Merchant arrives once inventory wealth (sum of item.value * qty, not
+# counting equipped gear) reaches this -- the starting wood pickaxe is
+# worth 10, so this is "you've gathered a bit of loot", not "you spawned".
+NPC_MERCHANT_MIN_WEALTH = 25
+NPC_WIDTH_TILES = 0.8
+NPC_HEIGHT_TILES = 1.8
+
 # --- Save / load ---
 SAVE_FILE_PATH = os.path.join("saves", "save.json")
 NOTIFICATION_THROTTLE_S = 1.5  # min gap between repeats of the *same* blocked-action message
+
+# --- Floating damage numbers ---
+DAMAGE_POPUP_LIFETIME_S = 0.8
+DAMAGE_POPUP_RISE_PX_PER_S = 52.0
+
+# --- Enemy-fired projectiles (boss ranged attacks) ---
+ENEMY_PROJECTILE_SIZE_TILES = 0.35
+ENEMY_PROJECTILE_LIFETIME_S = 3.0
+ENEMY_PROJECTILE_GRAVITY_SCALE = 0.35  # fraction of world GRAVITY, same idea as PROJECTILE_GRAVITY_SCALE
+
+# --- Boss: Slime King (Phase 10) ---
+# Phases are keyed off remaining-health ratio (1.0 -> 0.0), not a separate
+# timer -- entering a lower phase is permanent since health only ever goes
+# down, exactly the "no going back" progression a real boss fight needs.
+# See game/entities/boss_ai.py.
+BOSS_PHASE_2_HEALTH_RATIO = 0.66  # <= this ratio: adds the ranged Slime Lob attack
+BOSS_PHASE_3_HEALTH_RATIO = 0.33  # <= this ratio: enrages -- summons minions once, hops/attacks faster, gains a landing shockwave
+SLIME_KING_MAX_HEALTH = 480.0
+SLIME_KING_CONTACT_DAMAGE = 24.0
+SLIME_KING_MOVE_SPEED = 4.5
+SLIME_KING_WIDTH_TILES = 2.4
+SLIME_KING_HEIGHT_TILES = 1.8
+SLIME_KING_HOP_IMPULSE = 12.0
+SLIME_KING_HOP_INTERVAL_MIN_S = 0.5
+SLIME_KING_HOP_INTERVAL_MAX_S = 1.1
+SLIME_KING_PHASE_SPEED_MULT = (1.0, 1.25, 1.6)  # hop speed/frequency scale, indexed by phase_index (0/1/2)
+SLIME_KING_LOB_DAMAGE = 14.0
+SLIME_KING_LOB_SPEED = 9.0
+SLIME_KING_LOB_COOLDOWN_S = 2.2  # divided by SLIME_KING_PHASE_SPEED_MULT[phase_index]
+SLIME_KING_MINION_COUNT = 2  # regular Slimes summoned once, on entering phase 3
+SLIME_KING_STOMP_DAMAGE = 16.0
+SLIME_KING_STOMP_RADIUS_TILES = 3.0  # phase-3 landing shockwave -- hits even without a direct hitbox overlap
+BOSS_COIN_BOUNTY = 60  # bonus coins granted on top of the guaranteed exclusive drop

@@ -6,6 +6,7 @@ import random
 from game.entities.entity import Entity
 from game.entities.enemy_def import EnemyDef
 from game.settings import TILE_SIZE, ENEMY_HIT_INVULNERABILITY_S
+from game.rendering.damage_numbers import queue_popup
 
 
 class Enemy(Entity):
@@ -27,12 +28,14 @@ class Enemy(Entity):
         self.hop_cooldown_remaining = random.uniform(0.0, 1.0)
         self.bob_phase = random.uniform(0.0, 6.28)
         self.bob_center_y = spawn_y_px  # flying enemies bob around this altitude
+        self.pending_damage_popups = []
 
     def take_damage(self, amount: float) -> bool:
         """Returns True if this hit was applied (False if currently
         invulnerable)."""
         if not self.alive or self.invulnerability_remaining > 0.0:
             return False
+        queue_popup(self, amount)
         self.health -= amount
         self.invulnerability_remaining = ENEMY_HIT_INVULNERABILITY_S
         if self.health <= 0:

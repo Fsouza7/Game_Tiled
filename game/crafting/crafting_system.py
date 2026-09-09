@@ -58,6 +58,16 @@ def _newly_discovered_recipes(before_ids: set, discovered_item_ids) -> List[Reci
     ]
 
 
+def mark_discovered(player, item_id: str) -> List[RecipeDef]:
+    """Marks item_id discovered without adding it to the inventory -- for
+    call sites that already granted the item themselves (e.g. a shop buy
+    that had to handle an inventory-full refund). Returns any recipes that
+    just became fully discovered as a result."""
+    before = _discovered_recipe_ids(player.discovered_item_ids)
+    player.discovered_item_ids.add(item_id)
+    return _newly_discovered_recipes(before, player.discovered_item_ids)
+
+
 def collect_and_discover(player, item_id: str, quantity: int) -> List[RecipeDef]:
     """Adds item_id to the player's inventory (via Player.collect_item,
     which marks it discovered) and returns any recipes that just became

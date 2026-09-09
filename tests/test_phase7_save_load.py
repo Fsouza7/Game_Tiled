@@ -137,7 +137,9 @@ def test_pause_menu_save_and_load_round_trip_through_game_app(tmp_path, monkeypa
 
     app = GameApp(seed=DEFAULT_SEED)
     try:
+        app.title_open = False
         app.character_select_open = False
+        app.class_select_open = False
         app.paused = True
         app.player.health = 33.0
         app.player.inventory.add_item("wood", 4)
@@ -153,5 +155,76 @@ def test_pause_menu_save_and_load_round_trip_through_game_app(tmp_path, monkeypa
 
         assert app.player.health == 33.0
         assert any(s.item_id == "wood" and s.quantity == 4 for s in app.player.inventory.slots)
+    finally:
+        pygame.quit()
+
+
+def test_game_app_boots_on_title_screen_not_character_select():
+    from game.core.game_app import GameApp
+
+    app = GameApp(seed=DEFAULT_SEED)
+    try:
+        assert app.title_open is True
+        assert app.character_select_open is False
+        assert app.class_select_open is False
+        for _ in range(3):
+            app.step(dt=1 / 60)
+        assert app.title_open is True
+    finally:
+        pygame.quit()
+
+
+def test_title_new_game_opens_character_select(tmp_path, monkeypatch):
+    from game.core.game_app import GameApp
+    from game.rendering.renderer import title_button_rects
+
+    monkeypatch.setattr(save_system, "SAVE_FILE_PATH", str(tmp_path / "save.json"))
+    app = GameApp(seed=DEFAULT_SEED)
+    try:
+        new_pos = title_button_rects()["new"].center
+        click = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=new_pos)
+        app.input_handler.handle_discrete_events([click], app)
+        assert app.title_open is False
+        assert app.character_select_open is True
+        assert app.class_select_open is False
+    finally:
+        pygame.quit()
+
+
+def test_title_continue_without_save_is_a_noop(tmp_path, monkeypatch):
+    from game.core.game_app import GameApp
+    from game.rendering.renderer import title_button_rects
+
+    monkeypatch.setattr(save_system, "SAVE_FILE_PATH", str(tmp_path / "missing.json"))
+    app = GameApp(seed=DEFAULT_SEED)
+    try:
+        continue_pos = title_button_rects()["continue"].center
+        click = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=continue_pos)
+        app.input_handler.handle_discrete_events([click], app)
+        assert app.title_open is True
+        assert app.character_select_open is False
+    finally:
+        pygame.quit()
+
+
+def test_title_continue_loads_save_and_skips_select_screens(tmp_path, monkeypatch):
+    from game.core.game_app import GameApp
+    from game.rendering.renderer import title_button_rects
+
+    monkeypatch.setattr(save_system, "SAVE_FILE_PATH", str(tmp_path / "save.json"))
+    app = GameApp(seed=DEFAULT_SEED)
+    try:
+        app.player.health = 33.0
+        app.save_game()
+        app.player.health = 100.0
+
+        continue_pos = title_button_rects()["continue"].center
+        click = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=continue_pos)
+        app.input_handler.handle_discrete_events([click], app)
+
+        assert app.title_open is False
+        assert app.character_select_open is False
+        assert app.class_select_open is False
+        assert app.player.health == 33.0
     finally:
         pygame.quit()

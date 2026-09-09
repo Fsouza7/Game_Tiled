@@ -8,9 +8,9 @@ game code, names or maps are reused. Real sprite art from the bundled
 reuse" below); none of it drives gameplay data, and every reuse is
 documented rather than pretended away.
 
-> **Status: Phase 6 (biomes) + Deferred-assets pass 2 + Crafting UX pass +
-> Phase 7 (structures + save/load) + Summoner class + RPG skill/leveling system**
-> — see `TODO.md` for the full roadmap and what is/isn't implemented yet.
+> **Status: Phase 8 (NPCs) + Phase 7 (structures + save/load) + Summoner
+> class + RPG skill/leveling system** — see `TODO.md` for the full
+> roadmap and what is/isn't implemented yet.
 
 This repository also contains an older, unrelated fixed-level platformer
 prototype (`Objects/`, `Logics/`, root `settings.py`/`setup.py`). It is kept
@@ -73,20 +73,29 @@ the Summoner class (class/summon registry sanity, the weapon_class
 gate blocking attacks both ways, casting-then-replacing a summon through
 the real input path, a summon chasing/damaging a nearby enemy and hovering
 near the player otherwise, the class-select screen's click+confirm path,
-and a full app boot through both select screens), and the skill/leveling
+and a full app boot through both select screens), the skill/leveling
 system (the XP curve against known reference values, level-up queuing,
 skill-tree gating, every multiplier/bonus helper, every XP hook point
 across combat/mining/crafting, the Magic-boosted summon damage, the
 crafting material-refund roll, and a full app test driving real level-up
-notifications and the Skills screen's click-to-select/unlock flow).
+notifications and the Skills screen's click-to-select/unlock flow), and
+Phase 8 NPCs (registry/shop-price sanity, spawn conditions for Guide/
+Merchant/Blacksmith, house-or-fallback home assignment, dialogue wrap,
+buy/sell including the inventory-full refund and the can't-sell-coins
+guard, T-to-talk plus shop click-to-buy/sell through the real
+InputHandler, and a full GameApp path that spawns the Guide, talks to
+them, then unlocks the other two and round-trips them through save/load
+without re-announcing).
 
 ## Controls
 
-A one-time character-select screen appears at startup: click a portrait (or
-Left/Right to change the highlight), Enter/Space to confirm. A class-select
-screen follows immediately after (same click/arrow-keys/Enter controls,
-text cards instead of portraits) -- see "How the Summoner class works"
-below. Everything below applies once you're in the world.
+A title screen appears at startup: Continue (if a save exists) or New
+Game. New Game then shows character select (click a portrait or Left/Right,
+Enter/Space to confirm) and class select immediately after (same
+click/arrow-keys/Enter controls, text cards instead of portraits) -- see
+"How the title screen works" and "How the Summoner class works" below.
+Continue loads the save and skips both. Everything below applies once
+you're in the world.
 
 | Action | Key |
 |---|---|
@@ -96,8 +105,9 @@ below. Everything below applies once you're in the world.
 | Place block | Right mouse |
 | Select hotbar slot | 1-9 |
 | Eat the selected food item (heals HP) | F |
+| Summon the Slime King boss (needs a Slime Core Idol selected) | G |
 | Zoom in/out | Mouse wheel, or +/- |
-| Open/close inventory & equipment | E |
+| Open/close inventory & equipment | I |
 | Equip an armor piece (while inventory is open) | Left-click it in the bag |
 | Unequip an armor piece (while inventory is open) | Left-click its equipment slot |
 | Show an item's tooltip (name, description, stats -- while inventory is open) | Hover it |
@@ -106,6 +116,8 @@ below. Everything below applies once you're in the world.
 | Craft a recipe / start a smelt job (while crafting is open) | Left-click its row |
 | Scroll the crafting list (while crafting is open) | Mouse wheel |
 | Open/close Skills (levels + skill-point tree) | K |
+| Talk to a nearby NPC, or open a Personal Chest | T |
+| Use equipped accessory (Grapple Hook) | E |
 | Select a skill / unlock an eligible tree node (while Skills is open) | Left-click it |
 | Attack (melee or ranged -- select a weapon in the hotbar first) | Left-click |
 | Pause (opens a real menu: Resume/Settings/Save/Load/Restart/Quit) | Esc |
@@ -119,8 +131,10 @@ With a melee weapon (Wood Sword) selected, left-click swings in a
 the mouse points at, not just strictly left/right -- and plays a brief
 slash-arc visual in that direction. With a ranged weapon (Wood Bow)
 selected and arrows in your inventory, left-click fires an arrow straight
-at the cursor. Left-click only mines/attacks -- whichever the selected item
-supports -- so mining is automatically disabled while a weapon is selected.
+at the cursor. Hits show a floating damage number at the point of impact
+(red when you take damage, gold when an enemy does). Left-click only
+mines/attacks -- whichever the selected item supports -- so mining is
+automatically disabled while a weapon is selected.
 
 ## Architecture
 
@@ -144,7 +158,7 @@ game/
     item_registry.py     # every item type, one entry each (add items here)
   inventory/
     inventory.py        # slots, stacking, hotbar selection, add/remove
-    equipment.py         # RPG-style armor slots (head/body): equip/unequip, total defense
+    equipment.py         # RPG-style armor slots (head/body/legs/boots/accessory): equip/unequip, total defense
   crafting/
     recipe.py           # RecipeDef schema (ingredients, result, optional station)
     recipe_registry.py   # every recipe, one entry each (add recipes here)
@@ -165,6 +179,12 @@ game/
   combat/
     projectile.py        # a fired projectile (arrow): straight-line + light gravity arc
     combat_system.py      # melee/ranged attack resolution, projectile updates, contact damage, knockback
+  npcs/
+    npc_def.py            # NpcDef + ShopOffer schema
+    npc_registry.py        # Guide, Merchant, Blacksmith (add NPCs here)
+    npc.py                 # runtime NPC instance (position, dialogue cursor)
+    npc_spawner.py          # spawn conditions + house/fallback home assignment
+    shop.py                 # buy/sell transactions (coins), inventory wealth
   core/
     camera.py           # smooth follow + world-bound clamping + zoom
     debug_overlay.py     # F3 HUD
@@ -177,6 +197,7 @@ game/
     renderer.py          # draws world/player/HUD/inventory+equipment panel/crafting panel; no gameplay logic
     assets.py            # loads/slices real art and builds procedural textures+icons
     particles.py          # Dust/Confetti: a small generic spawn/update/expire particle system
+    damage_numbers.py     # floating "-N" pops at hit position (player red, enemy gold)
 tests/
   test_phase1_smoke.py  # headless functional tests for everything above
 ```
@@ -242,10 +263,10 @@ Add one `ItemDef` entry in `game/items/item_registry.py` with a `category`
   `max_durability` (not yet consumed -- no durability loss is implemented
   yet), and for ranged weapons `is_ranged=True` + `ammo_item_id`.
 - **Armor**: set `equip_slot` (must be one of `game/inventory/equipment.py`'s
-  `SLOTS`, currently `"head"`/`"body"`) and `defense` (flat damage
-  reduction applied in `combat_system.resolve_contact_damage`). Add a new
-  body-part slot by adding its name to `SLOTS`; the inventory screen lays
-  out one box per slot automatically.
+  `SLOTS`, currently `"head"`/`"body"`/`"legs"`/`"boots"`) and `defense` (flat damage
+  reduction applied in `combat_system.resolve_contact_damage`). Accessories
+  use `"accessory"`. Add a new body-part slot by adding its name to `SLOTS`;
+  the inventory screen lays out one box per slot automatically.
 - **Icon**: resolution order is `places_tile_id` (block/decoration -- uses
   the tile's own texture) -> `icon_tile_id` (borrow any tile's texture
   without being placeable, e.g. an ore or raw material) -> `icon_key`
@@ -365,15 +386,27 @@ unaffected):
   launches upward instead of coming to rest and skips fall damage for that
   landing -- like a soft cushion, not a floor.
 
+## How the title screen works
+
+On boot, `GameApp.title_open` blocks the game loop and shows Continue /
+New Game (`Renderer._draw_title_screen`) instead of jumping straight into
+character select. Continue is disabled until a save exists
+(`save_system.save_exists`); clicking it (or pressing Enter when a save
+is present) calls `GameApp.load_game` and skips character/class select.
+New Game (or Enter with no save) closes the title and opens character
+select as before. Single-slot save (`saves/save.json`), same file the
+pause menu already uses.
+
 ## How character select works
 
 `assets/MainCharacters/` has 4 interchangeable skins (Ninja Frog plus Mask
 Dude/Pink Man/Virtual Guy) with identical frame sizes and animation
-filenames, registered in `game/entities/character_registry.py`. At startup
-`GameApp.character_select_open` blocks the normal game loop and shows a
+filenames, registered in `game/entities/character_registry.py`. After New
+Game on the title screen, `GameApp.character_select_open` blocks the
+normal game loop and shows a
 row of portraits (`Renderer._draw_character_select_screen`); clicking one
 or pressing Left/Right sets `Player.character_id`, and Enter/Space closes
-the screen and starts play normally. `Player.character_id` is the only new
+the screen and opens class select. `Player.character_id` is the only new
 field on Player -- `Renderer` preloads every registered character's
 animations up front (`assets.load_all_character_animations`) and looks up
 the active one by id when drawing, so switching skins never needs to
@@ -381,13 +414,14 @@ reconstruct the Player.
 
 ## How the pause menu works
 
-Esc opens a real menu instead of a plain "PAUSED" label, using
-`assets/Menu/Buttons/Menu_jogo/`: **Resume** unpauses, **Restart** rebuilds
-the whole run from the same seed (`GameApp.restart` -> `_new_run`, keeping
-the chosen character skin), **Quit** exits, and **Settings** opens a small
-sub-panel (`GameApp.settings_open`) with Zoom In/Out and Back -- reusing
-the camera zoom that already existed rather than adding a fake "Settings"
-button with nothing behind it. There's still no audio system (see
+Esc opens a real menu instead of a plain "PAUSED" label, using the UI
+reskin's wood-plank buttons (see "How the UI theme works"): **Resume**
+unpauses, **Restart** rebuilds the whole run from the same seed
+(`GameApp.restart` -> `_new_run`, keeping the chosen character skin),
+**Quit** exits, and **Settings** opens a small sub-panel
+(`GameApp.settings_open`) with Zoom In/Out and Back -- reusing the camera
+zoom that already existed rather than adding a fake "Settings" button
+with nothing behind it. There's still no audio system (see
 "Cross-cutting" in `TODO.md`), so Settings doesn't have a volume control.
 
 ## How Checkpoints work
@@ -501,9 +535,10 @@ player/enemies every frame instead of being spawned and expired.
 
 ## How equipment works
 
-The inventory screen (`E`) is a two-panel "character sheet": a left column
+The inventory screen (`I`) is a two-panel "character sheet": a left column
 with the player's portrait, one bordered slot per entry in
-`game/inventory/equipment.py`'s `SLOTS` (currently Head and Body) and a
+`game/inventory/equipment.py`'s `SLOTS` (Head, Body, Legs, Boots, Accessory)
+and a
 stats block (HP / total Defense / the selected hotbar item's Attack), and a
 right-side bag grid (the same 20 inventory slots as before). Equipping
 moves the item out of the bag into its slot (click an armor item in the
@@ -512,7 +547,10 @@ slot -- bag or equipment -- gets a border colored by `ItemDef.rarity`
 (common/uncommon/rare/epic). `Equipment.total_defense()` sums every
 equipped item's `defense` and is subtracted from incoming contact damage in
 `combat_system.resolve_contact_damage`, floored at `MIN_DAMAGE_AFTER_DEFENSE`
-so armor reduces damage but never fully negates it. The weapon slot in
+so armor reduces damage but never fully negates it. Worn pieces can also
+emit light (`ItemDef.light_emit`, same 0-15 scale as torches): the
+brightest equipped piece is added as a mobile light source at the player
+(the Arcane Helm). The weapon slot in
 combat is still the hotbar selection, not a separate equip slot -- see
 "Controles" above.
 
@@ -551,9 +589,13 @@ Casting a summon rod (left-click with it selected) summons its minion at
 the player's position, replacing whatever summon was already active --
 only one summon is ever out at a time. Two rods exist so far: the **Twig
 Rod** (craftable anywhere from 8 Wood -- also handed to a Summoner for
-free the moment the class is picked) casts a weak **Twig Sprite**; the
+free the moment the class is picked) casts a **Twig Sprite**; the
 **Iron Rod** (a Workbench recipe needing a smelted Iron Bar) casts a much
-stronger **Iron Guardian**. A summon (`game/entities/summon.py`,
+stronger **Iron Guardian**, drawn with `assets/flying-head.png`
+(`assets.load_iron_guardian_animations`) -- a sheet that was sitting
+completely unused after an earlier pass moved the Duskwing enemy to
+`Bat.png` instead. Twig Sprite still has no dedicated art (the flat
+glowing shape every summon used to render). A summon (`game/entities/summon.py`,
 `summon_ai.py`) flies toward the nearest alive enemy within its
 `seek_radius_tiles` and attacks once in range (`combat_system.
 resolve_summon_attacks`, on the same "AI moves, combat_system deals the
@@ -583,13 +625,14 @@ Magic XP, taking damage grants Defense XP, breaking a tile grants Mining
 XP, and a successful craft or completed smelt grants Crafting XP.
 Hitpoints never gets XP directly -- like real RuneScape, it passively
 earns 1/3 of every Attack/Defense/Magic grant and raises `player.
-max_health` on level-up (healing you by the same amount), since every
-combat skill also trains survivability.
+max_health` by `HITPOINTS_HP_PER_LEVEL` (10) on each level-up (healing
+you by the same amount), since every combat skill also trains
+survivability.
 
 Every skill has a real effect, not just a number going up: Attack and
-Magic scale weapon/summon damage (a percentage per level, since this game
-has no hit-chance/accuracy system to attach a RuneScape-style Attack-vs-
-Strength split to); Defense adds a flat bonus on top of equipped armor
+Magic scale weapon/summon damage (`ATTACK_DAMAGE_PCT_PER_LEVEL` 5% and
+`MAGIC_DAMAGE_PCT_PER_LEVEL` 8% per level after 1, so the floating
+numbers actually change); Defense adds a flat bonus on top of equipped armor
 via `combat_system.player_total_defense(player)`; Mining scales mining
 power; Crafting boosts its own XP gain and can refund a material. Leveling
 a skill also earns it points (1 per level) spendable on that skill's own
@@ -612,12 +655,12 @@ Magic/Hitpoints' individual progress toward their next level -- Combat Lv
 itself has no XP track of its own, so this is the closest honest
 approximation of "how close to the next tick").
 
-A summon's Magic-boosted stats are baked in at cast time
-(`combat_system._try_summon_cast`) as per-instance overrides on the
-`Summon` object itself (`damage`/`move_speed`/`attack_interval_s`), the
-same way `Enemy.health` already diverges from its `EnemyDef.max_health`
-template -- leveling Magic mid-fight doesn't retroactively buff an
-already-summoned minion, only casting (or re-casting) a rod does.
+A summon's Magic damage bonus is applied live on each hit
+(`combat_system.resolve_summon_attacks`), so leveling Magic mid-fight
+shows up on the next number that pops -- recasting the rod is not
+required. Swift Familiar's speed/interval bonus is still baked in at
+cast time (`combat_system._try_summon_cast`) as a per-instance override
+on `move_speed`/`attack_interval_s`.
 
 ## How to create a recipe
 
@@ -725,15 +768,47 @@ grant via `collect_and_discover` (so a first Iron Bar can itself unlock
 the Iron Pickaxe recipe) and announce with a "ready!" toast. Four ores
 that were catalog-only in earlier phases now have a real obtain-then-use
 path this way: Iron Ore, Topaz, Sapphire and Emerald each smelt into their
-own Bar; only Iron Bar has a further crafting use so far (the Iron
-Pickaxe) -- the other three remain catalog-only, same honest gap the raw
-gems already had (see "Known limitations").
+own Bar. Iron Bar crafts Iron tools/armor and can be re-smelted (2 Iron
+Bars + 2 Coal) into a Steel Bar for the next mining/armor tier. Topaz,
+Sapphire and Emerald Bars combine at a Workbench into an **Arcane Bar**,
+the magic-tier material (see "How magic-tier gear works").
+
+## How magic-tier gear works
+
+Visit all three non-forest biomes for Topaz (desert), Sapphire (snow) and
+Emerald (jungle), smelt each into its Bar, then craft an **Arcane Bar** at
+a Workbench (one of each). That bar unlocks three recipes, each with a
+mechanic rather than only a bigger number:
+
+- **Arcane Pickaxe** -- mines faster than steel (`mining_power` 9) and
+  rolls `fortune_chance` (`ARCANE_PICKAXE_FORTUNE_CHANCE`) for a second
+  copy of whatever the tile dropped.
+- **Arcane Staff** -- a Warrior ranged weapon with no ammo. Bolts fly
+  straight (no gravity arc), scale with the Magic skill, and grant Magic
+  XP. Summoners already train Magic through minions and cannot fire it
+  (`weapon_class` stays `"normal"`).
+- **Arcane Helm** -- defense above a Steel Helmet, plus `light_emit` so
+  wearing it lights nearby tiles like a moving torch.
+
+## How the Personal Chest works
+
+A craftable, placeable storage tile (`tile_registry.PERSONAL_CHEST_ID`,
+8 Wood, anywhere). **T** while standing near one opens a two-grid panel
+(bag on the left, stash on the right); click a stack to move as much as
+fits. Every placed Personal Chest shares the same stash
+(`Player.personal_chest`) -- contents follow the player, not the tile, so
+mining a chest drops the furniture item without dumping the items inside.
+The world-loot Chest inside structures is a different tile (mine it for
+a random drop); this one is storage. T prefers an NPC if both are in
+range. The stash round-trips through save/load; old saves without the
+field start empty. Texture is `assets/Items/Boxes/Box3`.
 
 ## How to create an enemy
 
 Add one `EnemyDef` entry in `game/entities/enemy_registry.py`: `ai_type`
 (`AIType.WALK` ground patrol/chase, `AIType.HOP` slime-style periodic
-jumps, or `AIType.FLY` gravity-free hover/chase), `max_health`,
+jumps, `AIType.FLY` gravity-free hover/chase, or `AIType.BOSS` for a
+multi-phase boss -- see "How the Slime King boss works" below), `max_health`,
 `contact_damage`, `move_speed` (px/tick -- see "Velocity units" above),
 `width_tiles`/`height_tiles`, `color`, `spawn_weight` (relative chance
 among all enemies when the spawner picks one), `spawn_time`
@@ -747,12 +822,58 @@ that biome -- Scorpion is desert-only, spawned by checking
 *behavior* (not just new stats on an existing one), add a 4th `AIType` and
 a matching `_update_*` function in `enemy_ai.py`.
 
-There is no dedicated enemy art in `assets/` -- `assets/20 Enemies.png` is
-only a promotional preview image for a separate paid pack (it has a
-"download all 20 enemies, link in the project page" watermark baked in and
-was never meant as usable game art), so it isn't used. Enemies are drawn as
-flat colored shapes by `ai_type` in `renderer.py`'s `_draw_enemies` (ellipse
-for HOP, diamond for FLY, rectangle for WALK) until real sprites are added.
+Enemy art lives in `assets/Enemies/`. **Duskwing** uses `mini bat.png`
+(32px cells: hover flap on row 0, dive on row 1). `Bat.png` is a 5x4 of
+near-identical poses so it looked frozen in place. Flyers spawn several
+tiles above the grass so they hover instead of sitting on the ground
+until the player walks into chase range. **Slime** and **Slime King**
+reuse `Mini_Slime_Idle/Walk/Hurt.png` (32px strips; the king is just
+scaled up), feet-anchored so hops sit on the ground. **Scorpion** uses
+`Scorpian/Idel.png`, `Walk.png` and `Attack.png` (3-frame 32px strips).
+Crawler has no matching sprite (`mosquito.png` / `Eyeball.png` are unused
+flying sheets; `assets/20 Enemies.png` is a watermarked promo) so it stays
+a flat colored rectangle in `_draw_enemies`. To give a new enemy a sprite,
+add it to `assets.load_enemy_animations` keyed by `EnemyDef.id`.
+
+## How the Slime King boss works
+
+The first boss (Phase 10, `game/entities/boss.py` + `boss_ai.py`). A
+`Boss` is just an `Enemy` subclass with extra phase-tracking fields, so it
+gets melee/ranged/summon damage, contact damage, drops and its transient
+(not-saved) lifetime for free from the existing `combat_system`/`GameApp`
+machinery -- only its movement/attacks and the projectile it fires needed
+new code.
+
+**Summon:** craft a **Slime Core Idol** (Workbench: 20 Slime Gel + 5 Iron
+Bar) and press **G** with it selected (`Player.use_selected_summon_item` ->
+`GameApp.try_summon_boss`) to spawn the Slime King beside you -- blocked
+(idol not consumed) while one is already alive.
+
+**Phases**, keyed off remaining-health ratio and permanent once entered
+(health only ever goes down):
+- **Phase 1** (>66%): hops toward the player (same shape as the regular
+  Slime's `HOP` AI, just bigger/harder), contact damage only.
+- **Phase 2** (<=66%): also lobs a gravity-arced **Slime Lob** projectile
+  on a cooldown -- `EnemyProjectile` (`game/combat/enemy_projectile.py`) is
+  the enemy-owned mirror of the player's `Projectile`, resolved against the
+  player by `combat_system.update_enemy_projectiles`.
+- **Phase 3** (<=33%, enrage): summons 2 regular Slimes once, hops/lobs
+  faster, and every landing sets `Boss.stomp_pending` -- a shockwave
+  (`combat_system.resolve_boss_stomp`) that damages the player within
+  `SLIME_KING_STOMP_RADIUS_TILES` even without a direct hitbox overlap,
+  unlike ordinary contact damage.
+
+A persistent bar at top-center shows its name, HP and current phase number
+from the moment it's summoned (not just once damaged, like the small
+floating bar every other enemy gets). **Drops:** a guaranteed **Slime
+King's Core** (`drop_chance=1.0`) plus a coin bounty
+(`BOSS_COIN_BOUNTY`) -- the Core crafts into the **Crown of the Slime
+King** (Workbench: 1 Core + 3 Steel Bar), the best head armor in the game.
+
+Known gaps: no arena/leash keeps the player from wandering off mid-fight;
+summoning doesn't check the ground under it is solid (same simplification
+the Summoner's summon rod already uses); no dedicated art/audio; not
+persisted across save/load (same transience as regular enemies).
 
 ## How biomes work
 
@@ -797,9 +918,66 @@ vegetation/decoration or a biome-exclusive enemy, see
 
 ## How to create an NPC
 
-Not implemented yet — this is Phase 8. See `TODO.md`. Documenting "how to
-add one" here before the system exists would describe something that
-doesn't exist yet, so it's deferred until that phase lands.
+Add one `NpcDef` entry in `game/npcs/npc_registry.py`: `dialogue` (a tuple
+of lines shown in order -- click Next or the panel body to advance),
+`shop_stock` (a tuple of `ShopOffer(item_id, price)` -- empty for a
+talk-only NPC like the Guide), `spawn_condition` (`"always"`, `"wealth"`,
+or `"discovered_item"`), and for `"discovered_item"` a `spawn_item_id`
+the player must have obtained at least once. Shop `item_id`s must already
+exist in `item_registry.py`, and `price` must be strictly greater than
+that item's `value` so buying then selling can't print coins. No other
+file needs to change -- `npc_spawner` assigns a home, the T-to-talk
+panel lists whatever is registered, and a `"wealth"`/`"discovered_item"`
+NPC toasts `"X has arrived!"` the moment they qualify.
+
+## How NPCs work
+
+Three townsfolk, spawned from named conditions rather than wandering in
+at random:
+
+- **Guide** (`spawn_condition="always"`): already there at run start.
+  Lives in the nearest House (Phase 7) if one is within
+  `NPC_GUIDE_MAX_HOUSE_DISTANCE_TILES` of world-center spawn; otherwise
+  stands on the surface a few tiles left of spawn so they're actually
+  findable. Dialogue is a short tutorial (mine, craft, houses, skills,
+  the other two NPCs' unlocks). No shop.
+- **Merchant** (`"wealth"`): appears once bag wealth (sum of
+  `ItemDef.value * quantity`, not counting equipped gear) reaches
+  `NPC_MERCHANT_MIN_WEALTH`. The starting wood pickaxe is worth 10, so
+  this is "you've gathered a bit of loot", not "you spawned". Sells
+  convenience goods (torches, arrows, apples, wood) and buys anything
+  except coins.
+- **Blacksmith** (`"discovered_item"`, `iron_bar`): appears once you've
+  obtained an Iron Bar (smelted or looted from a Chest). Sells tools and
+  armor (Wood Sword through Steel Pickaxe) as a paid shortcut around
+  crafting.
+
+Homes prefer unused Houses, nearest to spawn first, then a surface
+fallback that skips columns whose tile above the ground isn't air (so
+nobody spawns inside a tree). Assignment is a pure function of
+`(seed, registry order)` -- the same NPC always claims the same home
+for a given seed, regardless of the order conditions unlock. Once
+present they stay, even if wealth later drops below the Merchant
+threshold (flickering in and out would feel like a bug).
+
+Press **T** while within `NPC_INTERACT_RANGE_TILES` to talk (a nameplate
+prompt appears when you're close enough). Esc / walking out of range /
+opening I, C, or K closes the panel. Click Shop on a Merchant or
+Blacksmith to buy (left list, costs coins) or sell (right bag grid,
+grants `ItemDef.value` coins per item). A full bag with no coin stack
+sells the whole clicked stack so the payment can occupy that slot;
+otherwise one item. Currency is the `coin` item --
+not crafted, not mined, only earned by selling. Shops have infinite
+stock; a buy that can't fit in the bag refunds the coins (same
+all-or-nothing rule as crafting). NPCs are not persisted: on load,
+conditions are re-derived from player state and they reappear at the
+same homes, without re-toasting an arrival.
+
+NPCs don't walk, fall, or fight (no pathfinding/schedule system), and
+they have no dedicated sprites -- they're a simple colored humanoid
+plus a nameplate, the same honest gap enemies already have. Mining the
+floor out from under one leaves them floating. See TODO.md for these
+and other known gaps.
 
 ## How procedural structures work
 
@@ -881,8 +1059,7 @@ on top of ordinary procedural generation, so an unmodified chunk needs no
 saved data at all.
 
 Not persisted (transient/regenerable, same as what already happens after
-Restart): enemies, projectiles, particles, on-screen notifications. No
-NPCs exist yet to persist either.
+Restart): enemies, NPCs, projectiles, particles, on-screen notifications.
 
 Two pause-menu buttons, Save and Load (`GameApp.save_game`/`load_game`),
 wired through `InputHandler._handle_pause_click` exactly like the
@@ -890,17 +1067,76 @@ existing Restart button. Save writes the file and pushes a "Game saved"
 toast; Load reads it (a "No save found" toast and a no-op if the file
 doesn't exist) and rebuilds `world`/`player`/`world_clock`/
 `furnace_manager` from the deserialized data, resetting the same per-run
-transient state `_new_run` already resets on Restart. No Save/Load art
-exists in `assets/Menu/Buttons/Menu_jogo/`, so their icons are hand-drawn
-(a floppy disk, a down-arrow into a tray) -- same precedent as the
-tool/weapon icons.
+transient state `_new_run` already resets on Restart. Their buttons are
+the UI reskin's Save/Load wood-plank art (see "How the UI theme works")
+-- no hand-drawn icon needed for these two anymore.
+
+## How the UI theme works
+
+A user-supplied asset pack landed in `assets/validar` (also reachable as
+`assets/Validar` -- Windows paths are case-insensitive) with a request to
+find sprites worth using. It turned out to be a top-down zombie-survival
+pack: its `Character`/`Enemies`/`Objects/Nature` art is drawn as seen
+from directly above (a walking character's head is visible with the body
+"flattened" beneath it), and thematically it's guns/zombies/cars/
+shipping containers. None of that fits this game -- a strict side-view
+2D platformer with a fantasy mining/crafting theme -- so using it for the
+player, an enemy, or decoration would read as visually wrong (something
+drawn for a bird's-eye view, standing in a world seen from the side) on
+top of not matching the setting. See `tests` -- there's no headless test
+for "does art look right", so this call was made by rendering sample
+sprites and inspecting them directly, not guessed from filenames.
+
+The pack's `UI/` folder is different: plain 2D icons and frames with no
+world perspective to clash, so every panel/button/health-bar/item-slot in
+the game was reskinned with it (`game/rendering/assets.py`'s
+`load_ui_theme`, `game/rendering/renderer.py`):
+- **Health bar** (`Renderer._draw_hp_frame_bar`): the pack's `HP-Bar.png`
+  frame (whole-image integer-scaled, not 9-sliced -- it's meant to be
+  shown at its own aspect ratio) with `HP.png` cropped to the current
+  health ratio and stretched into the frame's fill track (measured from
+  the frame's own hollow interior, `hp_bar_fill_track` in `load_ui_theme`,
+  not guessed). Shared by the player HUD bar and the Phase 10 boss bar.
+- **Panels** (`Renderer._draw_nine_slice`, used by `_draw_panel_chrome` --
+  Inventory/Crafting/Skills/Personal Chest/NPC dialogue all share it): a
+  generic, cached 9-slice -- corners/edges are scaled-up copies of the
+  source frame's native border, the middle stretches -- so one small
+  ~140x90 source panel reads cleanly at this game's much larger and
+  differently-shaped panels instead of one blurry whole-image stretch.
+  Automatically clamps its border down for a panel too short/narrow to
+  fit it (e.g. the crafting panel when almost nothing is discovered yet)
+  so corners never overlap into a corrupted-looking result.
+- **Item slots** (`_draw_item_slot`, plus the hotbar and crafting-grid-cell
+  call sites): the pack's cell texture, whole-image-scaled per slot (a
+  distinct "chosen" texture for the selected hotbar slot / hovered slot),
+  with the existing rarity-tier or ready/missing/needs-station status
+  border color kept on top -- the reskin only replaces the background,
+  not the functional color-coding.
+- **Buttons** (`Renderer._draw_ui_button`; title screen, pause menu + its
+  Settings sub-screen, NPC dialogue Shop/Next/Talk/Close): a wood-plank
+  button swapping in the pack's own "pressed" art on hover. Buttons whose
+  baked-in text already matches the action (Play/Save/Load/Settings/Quit)
+  draw no separate label; everything else (Restart, Zoom -/+, Back, Shop,
+  Next, Talk, Close) uses the textless "Blank" plank with a drawn label.
+  The pause menu's buttons changed from square icon buttons to landscape
+  plaques (`PAUSE_BUTTON_WIDTH`/`HEIGHT`) to match the art's own
+  proportions instead of squashing an oval into a square.
+
+The old `assets/Menu/Buttons/Menu_jogo/` icon set (and its hand-drawn
+Save/Load fallback icons, `_build_save_icon`/`_build_load_icon`) is fully
+unused after this pass and was deleted rather than left as dead code.
 
 ## Known limitations
 
 - Save is single-slot (`saves/save.json`) -- no multiple save files or a
-  picker UI. Enemies, projectiles, particles, and on-screen notifications
-  aren't persisted (see "How save/load works").
-- No NPCs or bosses yet (see `TODO.md`).
+  picker UI. Enemies, NPCs, projectiles, particles, and on-screen
+  notifications aren't persisted (see "How save/load works"). NPCs
+  reappear from their spawn conditions on load.
+- Only one boss exists so far, with no arena/leash mechanic and no
+  persistence across save/load (see "How the Slime King boss works").
+  NPCs don't walk, fall, or take damage, shops have infinite stock, and
+  they have no dedicated sprites (flat colored humanoids -- same gap as
+  enemies; see "How NPCs work").
 - Biomes have hard borders (no blending/transition strip between zones);
   caves are identical in every biome (same noise field regardless of the
   biome's stone); only Desert has unique surface vegetation (cacti) and an
@@ -915,18 +1151,19 @@ tool/weapon icons.
   "How the day/night cycle and lighting work").
 - Only 1 light source exists (Torch); only 1 enemy (Duskwing) is
   night-exclusive -- the other two spawn at any time of day.
-- Only 4 enemies (slime, crawler, duskwing, scorpion), all flat-colored
-  shapes -- no dedicated enemy art exists in this repo (see "How to create
-  an enemy").
+- Only 4 regular enemies (slime, crawler, duskwing, scorpion); slime,
+  Duskwing and Scorpion use `assets/Enemies/` sheets, crawler is still a
+  flat rectangle (see "How to create an enemy"). Slime King is the Phase
+  10 boss and reuses the slime sprite at a larger size.
 - Enemy kills grant loot directly to the player's inventory; there's no
   physical "item drop on the ground to walk over" entity yet.
-- Armor has exactly 2 equip slots (Head, Body).
+- Armor has 5 equip slots (Head, Body, Legs, Boots, Accessory). Wood,
+  Iron and Steel fill all four armor slots; magic-tier is the Arcane Helm
+  (light) plus pickaxe/staff, not a full fourth armor set. Accessory is
+  still the Grapple Hook.
 - A furnace smelts one job at a time with no queue (placing more furnaces
   is the way to parallelize); Coal is the only fuel, one fixed quantity
   per recipe, no fuel-efficiency mechanic.
-- Topaz/Sapphire/Emerald Bars are smeltable but still have no further
-  crafting use (same gap Iron Bar would have had without the Iron
-  Pickaxe) -- no tool/weapon/armor tier exists for them yet.
 - Only one tile can grant a random drop (Berry Bush, via `TileDef.drop_pool`)
   -- every other tile still has exactly one fixed `drop_item_id`.
 - Inventory/crafting UIs are click-driven panels (equip, unequip, craft,

@@ -19,8 +19,17 @@ from game.rendering.renderer import (
     recipe_at_screen_pos, equipment_slot_at_screen_pos, inventory_bag_index_at_screen_pos,
     crafting_max_scroll, CRAFTING_SCROLL_STEP,
     character_index_at_screen_pos, class_index_at_screen_pos, pause_button_at_screen_pos,
+    title_button_at_screen_pos,
     skill_index_at_screen_pos, skill_node_at_screen_pos,
+    npc_button_at_screen_pos, npc_shop_offer_at_screen_pos, npc_shop_bag_index_at_screen_pos,
+    chest_bag_index_at_screen_pos, chest_storage_index_at_screen_pos,
 )
+from game.inventory.inventory import transfer_stack
+from game.crafting.furnace_system import nearest_station_tile
+from game.world.tile_registry import PERSONAL_CHEST_ID
+from game.npcs.npc_spawner import nearest_in_range
+from game.npcs import shop as npc_shop
+from game.core import save_system
 
 
 class InputHandler:
@@ -31,12 +40,18 @@ class InputHandler:
         for event in events:
             if event.type == pygame.QUIT:
                 game_app.running = False
+            elif getattr(game_app, "title_open", False):
+                self._handle_title_event(event, game_app)
             elif game_app.character_select_open:
                 self._handle_character_select_event(event, game_app)
             elif game_app.class_select_open:
                 self._handle_class_select_event(event, game_app)
             elif event.type == pygame.KEYDOWN:
                 self._handle_keydown(event, game_app)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and getattr(game_app, "talking_to", None) is not None:
+                self._handle_npc_click(event.pos, game_app)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and getattr(game_app, "chest_open", False):
+                self._handle_chest_click(event.pos, game_app)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.paused:
                 self._handle_pause_click(event.pos, game_app)
             elif event.type == pygame.MOUSEWHEEL and game_app.crafting_open:
@@ -55,8 +70,31 @@ class InputHandler:
                 self._handle_inventory_right_click(event.pos, game_app)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.skills_open:
                 self._handle_skills_click(event.pos, game_app)
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not game_app.crafting_open and not game_app.inventory_open and not game_app.skills_open:
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not game_app.crafting_open and not game_app.inventory_open and not game_app.skills_open and getattr(game_app, "talking_to", None) is None and not getattr(game_app, "chest_open", False):
                 self._handle_attack_click(event.pos, game_app)
+
+    def _handle_title_event(self, event, game_app) -> None:
+        has_save = save_system.save_exists(save_system.SAVE_FILE_PATH)
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            action = title_button_at_screen_pos(event.pos)
+            if action == "continue":
+                self._title_continue(game_app, has_save)
+            elif action == "new":
+                self._title_new_game(game_app)
+        elif event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
+            if has_save:
+                self._title_continue(game_app, True)
+            else:
+                self._title_new_game(game_app)
+
+    def _title_continue(self, game_app, has_save: bool) -> None:
+        if not has_save:
+            return
+        game_app.load_game()
+
+    def _title_new_game(self, game_app) -> None:
+        game_app.title_open = False
+        game_app.character_select_open = True
 
     def _handle_character_select_event(self, event, game_app) -> None:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -162,6 +200,80 @@ class InputHandler:
             return
         player.inventory.swap_slots(bag_index, player.inventory.selected_hotbar_index)
 
+    def _handle_talk(self, game_app) -> None:
+        if game_app.paused:
+            return
+        if game_app.talking_to is not None:
+            self._close_npc_panel(game_app)
+            return
+        if getattr(game_app, "chest_open", False):
+            self._close_chest(game_app)
+            return
+        npc = nearest_in_range(game_app.player, getattr(game_app, "npcs", ()))
+        if npc is not None:
+            game_app.inventory_open = False
+            game_app.crafting_open = False
+            game_app.skills_open = False
+            self._close_chest(game_app)
+            game_app.talking_to = npc
+            game_app.npc_shop_open = False
+            npc.dialogue_index = 0
+            return
+        chest_pos = nearest_station_tile(
+            game_app.world, game_app.player.center_x, game_app.player.center_y, PERSONAL_CHEST_ID,
+        )
+        if chest_pos is None:
+            return
+        game_app.inventory_open = False
+        game_app.crafting_open = False
+        game_app.skills_open = False
+        self._close_npc_panel(game_app)
+        game_app.chest_open = True
+
+    def _handle_npc_click(self, pos, game_app) -> None:
+        npc = game_app.talking_to
+        if npc is None:
+            return
+        action = npc_button_at_screen_pos(pos, npc.npc_def, game_app.npc_shop_open)
+        if action == "close":
+            self._close_npc_panel(game_app)
+            return
+        if action == "shop":
+            game_app.npc_shop_open = True
+            return
+        if action == "talk":
+            game_app.npc_shop_open = False
+            return
+        if action == "next":
+            npc.advance_dialogue()
+            return
+
+        if not game_app.npc_shop_open:
+            # Clicking the dialogue body advances the line, same as Next.
+            npc.advance_dialogue()
+            return
+
+        offer_index = npc_shop_offer_at_screen_pos(pos, npc.npc_def)
+        if offer_index is not None:
+            offer = npc.npc_def.shop_stock[offer_index]
+            reason = npc_shop.buy_fail_reason(game_app.player, offer)
+            success, newly_discovered = npc_shop.buy(game_app.player, offer)
+            if not success:
+                game_app.notifications.push_throttled(reason or "Inventory full")
+                return
+            for recipe in newly_discovered:
+                game_app.notifications.push(f"New recipe unlocked: {recipe.name}")
+            return
+
+        bag_index = npc_shop_bag_index_at_screen_pos(pos, len(game_app.player.inventory.slots))
+        if bag_index is not None:
+            if not npc_shop.sell(game_app.player, bag_index):
+                slot = game_app.player.inventory.slots[bag_index]
+                if not slot.is_empty and slot.item_id == npc_shop.COIN_ITEM_ID:
+                    game_app.notifications.push_throttled("Can't sell coins")
+                elif not slot.is_empty:
+                    game_app.notifications.push_throttled("Inventory full")
+
     def _handle_skills_click(self, pos, game_app) -> None:
         skill_index = skill_index_at_screen_pos(pos)
         if skill_index is not None:
@@ -197,10 +309,41 @@ class InputHandler:
         elif isinstance(result, Summon):
             game_app.summons = [result]
 
+    def _handle_chest_click(self, pos, game_app) -> None:
+        player = game_app.player
+        bag_index = chest_bag_index_at_screen_pos(pos, len(player.inventory.slots))
+        if bag_index is not None:
+            moved = transfer_stack(player.inventory, bag_index, player.personal_chest)
+            if moved == 0 and not player.inventory.slots[bag_index].is_empty:
+                game_app.notifications.push_throttled("Chest is full")
+            return
+        stash_index = chest_storage_index_at_screen_pos(pos, len(player.personal_chest.slots))
+        if stash_index is not None:
+            moved = transfer_stack(player.personal_chest, stash_index, player.inventory)
+            if moved == 0 and not player.personal_chest.slots[stash_index].is_empty:
+                game_app.notifications.push_throttled("Inventory full")
+
+    def _close_npc_panel(self, game_app) -> None:
+        if hasattr(game_app, "close_npc_panel"):
+            game_app.close_npc_panel()
+        else:
+            game_app.talking_to = None
+            game_app.npc_shop_open = False
+
+    def _close_chest(self, game_app) -> None:
+        if hasattr(game_app, "close_chest"):
+            game_app.close_chest()
+        else:
+            game_app.chest_open = False
+
     def _handle_keydown(self, event, game_app) -> None:
         key = event.key
         if key == pygame.K_ESCAPE:
-            if game_app.settings_open:
+            if getattr(game_app, "talking_to", None) is not None:
+                self._close_npc_panel(game_app)
+            elif getattr(game_app, "chest_open", False):
+                self._close_chest(game_app)
+            elif game_app.settings_open:
                 game_app.settings_open = False
             else:
                 game_app.paused = not game_app.paused
@@ -208,6 +351,8 @@ class InputHandler:
             game_app.inventory_open = not game_app.inventory_open
             game_app.crafting_open = False
             game_app.skills_open = False
+            self._close_npc_panel(game_app)
+            self._close_chest(game_app)
         elif key == pygame.K_e:
             self._handle_use_accessory(game_app)
         elif key == pygame.K_c:
@@ -215,16 +360,24 @@ class InputHandler:
             game_app.inventory_open = False
             game_app.skills_open = False
             game_app.crafting_scroll_y = 0
+            self._close_npc_panel(game_app)
+            self._close_chest(game_app)
         elif key == pygame.K_k:
             game_app.skills_open = not game_app.skills_open
             game_app.inventory_open = False
             game_app.crafting_open = False
+            self._close_npc_panel(game_app)
+            self._close_chest(game_app)
+        elif key == pygame.K_t:
+            self._handle_talk(game_app)
         elif key == pygame.K_F3:
             game_app.debug_overlay.toggle()
         elif key == pygame.K_SPACE:
             game_app.player.jump()
         elif key == pygame.K_f:
             game_app.player.eat_selected()
+        elif key == pygame.K_g:
+            game_app.try_summon_boss()
         elif pygame.K_1 <= key <= pygame.K_9:
             game_app.player.inventory.select_hotbar(key - pygame.K_1)
         elif key == pygame.K_EQUALS or key == pygame.K_PLUS:
@@ -246,7 +399,7 @@ class InputHandler:
             else:
                 player.stop_horizontal()
 
-        if game_app.inventory_open or game_app.crafting_open or game_app.skills_open:
+        if game_app.inventory_open or game_app.crafting_open or game_app.skills_open or getattr(game_app, "talking_to", None) is not None or getattr(game_app, "chest_open", False):
             return  # freeze mining/placing while browsing a menu
 
         mouse_buttons = pygame.mouse.get_pressed(num_buttons=3)
@@ -269,7 +422,8 @@ class InputHandler:
                 game_app.notifications.push_throttled(blocked_reason)
             drop_item_id = player.try_mine(game_app.world, tile_x, tile_y, dt)
             if drop_item_id is not None:
-                newly_discovered = crafting_system.collect_and_discover(player, drop_item_id, 1)
+                quantity = player.mining_drop_quantity()
+                newly_discovered = crafting_system.collect_and_discover(player, drop_item_id, quantity)
                 for unlocked in newly_discovered:
                     game_app.notifications.push(f"New recipe unlocked: {unlocked.name}")
         else:

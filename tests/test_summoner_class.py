@@ -281,10 +281,13 @@ def test_game_app_boots_through_class_select_and_summoner_can_summon():
 
     app = GameApp(seed=DEFAULT_SEED)
     try:
-        assert app.class_select_open is False  # not open yet -- character select comes first
+        assert app.title_open is True
+        assert app.character_select_open is False
+        assert app.class_select_open is False  # title comes first, then character, then class
         for _ in range(3):
             app.step(dt=1 / 60)
 
+        app.title_open = False
         app.character_select_open = False
         app.class_select_open = True
         app.player.class_id = "summoner"

@@ -75,9 +75,9 @@ Known gaps, intentionally deferred:
 - [x] Headless tests: equip/unequip transactions (including the full-inventory refund case), defense reducing combat damage, recipe/item registry sanity, UI slot-rect geometry (no overlaps, click hit-testing matches what's drawn), section grouping, scroll clamping
 
 Known gaps, intentionally deferred:
-- Only 2 equipment slots (Head, Body) -- more (legs, boots, accessory) can be added by extending `Equipment.SLOTS`, but there's no armor data for them yet
 - Still no drag-and-drop; equip/unequip/craft are click-to-act, not click-and-drag
 - The hotbar-selected weapon is *not* a separate "equipped weapon" slot in the character sheet -- it's just the current hotbar selection, mirrored as an "Attack" stat
+- Legs/Boots slots and Iron/Steel armor sets later landed in Phase 9
 
 ## Health regen (user-requested): DONE
 - [x] Passive regen (`PLAYER_REGEN_RATE_HP_PER_S`) while below max health, paused for `PLAYER_REGEN_DELAY_AFTER_DAMAGE_S` after any damage (contact or fall) so it can't out-heal an active fight
@@ -116,7 +116,7 @@ Known gaps, intentionally deferred:
 - Only 1 biome-exclusive enemy (Scorpion/Desert) -- Snow and Jungle have no exclusive enemy yet
 - Hard biome borders -- zones change abruptly at their boundary, no blending/transition strip
 - Caves are identical in every biome (no biome-specific cave generation, only the stone/ore they're carved out of differs)
-- The three biome-exclusive gems (Topaz/Sapphire/Emerald) are catalog-only, same as `iron_ore` -- no smelting/crafting use exists for any of them yet
+- The three biome-exclusive gems (Topaz/Sapphire/Emerald) later gained smelt recipes and, in Phase 9, combine into an Arcane Bar
 - Snow and Jungle have no unique surface vegetation/decoration of their own yet -- they reuse Forest's tree system as-is
 - "Cave" isn't a zoned biome (see README "How biomes work") -- it's the Phase 1 universal underground, unaffected by the surface biome above it
 
@@ -169,7 +169,7 @@ Known gaps, intentionally deferred:
 - [x] Recipe discovery/unlock system: a recipe is hidden behind a "???"-style locked row until the player has *ever* obtained (mined/looted/crafted/smelted) every one of its ingredients at least once (`Player.discovered_item_ids`, permanent -- not cleared by respawn, and not the same as currently holding the item). Locked rows are specific, not mysterious: they name exactly which ingredient(s) are still undiscovered (`crafting_system.undiscovered_ingredients`) rather than hiding the recipe's name entirely. Obtaining the last missing ingredient pushes a "New recipe unlocked: X" toast (see notifications below)
 - [x] On-screen notifications (`game/core/notifications.py`, a small FIFO toast queue at top-center): recipe-unlock announcements, furnace outputs ready, and -- the specifically-requested case -- trying to mine a tool-gated block without the right tool now shows "Requires a Pickaxe" instead of silently doing nothing (`Player.blocked_mining_reason`, throttled via `push_throttled` so holding the mouse button doesn't spam it every frame)
 - [x] Furnace (`tile_registry.FURNACE_ID`, `game/crafting/furnace_system.py`): a craftable station where ore + Coal (fuel) becomes a bar over real time, not an instant craft -- starting a smelt consumes the ore/fuel immediately but the bar isn't granted until `smelt_time_s` passes (shown as a progress bar in the crafting screen's "Smelting" section), and a furnace can only smelt one job at a time. Resolves 4 "catalog-only" gaps called out in earlier phases: Iron Ore, Topaz, Sapphire and Emerald all now smelt into their own Bar (`game/crafting/smelt_registry.py`)
-- [x] Iron Bar has a genuine use, not another dead end: Iron Pickaxe (mining_power 5.0, between Stone's 3.0 and where Phase 9's tiered materials would continue) -- Topaz/Sapphire/Emerald Bars remain catalog-only for now, same honest gap the raw gems already had
+- [x] Iron Bar has a genuine use, not another dead end: Iron Pickaxe (mining_power 5.0, between Stone's 3.0 and where Phase 9's tiered materials would continue) -- Topaz/Sapphire/Emerald Bars later combine into the Phase 9 Arcane Bar
 - [x] Headless tests (`tests/test_crafting_and_furnace.py`, 26 tests): discovery locking/unlocking (including the "in inventory but never discovered" edge case), `collect_and_discover`/`craft_and_discover` announcing exactly the newly-unlocked recipes, `blocked_mining_reason` for the missing-tool/right-tool/out-of-reach/no-tool-needed cases, furnace start/busy/complete/restart lifecycle including insufficient ore or fuel, and the notification queue's ordering/expiry/throttling. Plus an updated `test_phase3_crafting.py` section-layout test and a full headless GameApp smoke test (mining-blocked message -> open crafting screen -> place a furnace -> start and complete a smelt -> item granted and discovered) exercising the real Renderer draw calls, not just the underlying logic
 
 - [x] Crafting screen redesigned a second time (user feedback: the row-based layout "looked weird" -- inconsistent full-color-fill "ready" rows next to nearly-empty locked rows, a station label floating disconnected near the icon): rebuilt as an icon grid (several recipes side by side per row, `_CATEGORY_SECTION_ORDER` sections unchanged) with a fixed details panel on the right showing whichever cell is hovered (name, station badge, full ingredient breakdown, live status line) -- shared card language (`_draw_row_card`-style accent borders) replaced with a per-cell colored border only, no more full-color fills. Undiscovered recipes no longer render at all (not even as a locked placeholder) -- `_recipe_sections`/`_crafting_layout`/`crafting_max_scroll`/`recipe_at_screen_pos` all now take `discovered_item_ids` and filter before layout, so a category with nothing discovered doesn't even show its header
@@ -178,8 +178,8 @@ Known gaps, intentionally deferred:
 Known gaps, intentionally deferred:
 - A furnace can only run one smelt job at a time (no queue) -- placing more furnaces is the way to parallelize
 - No fuel-efficiency mechanic (e.g. different fuels burning longer) -- Coal is the only fuel, one fixed quantity per smelt
-- Topaz/Sapphire/Emerald Bars have no further crafting use yet (same gap Iron Bar would have had without the Iron Pickaxe)
-- The "Materials" crafting-screen section is presently empty (no plain-craft recipes result in a MATERIAL item outside of smelting) -- it simply won't render until one exists, same as any other category
+- Topaz/Sapphire/Emerald Bars now craft into an Arcane Bar (Phase 9)
+- The "Materials" crafting-screen section includes the Arcane Bar recipe; other MATERIAL results still come from smelting
 - With locked recipes hidden entirely, there's no in-grid hint that a whole category (e.g. Weapons) has more waiting to be discovered -- only what's already unlocked is visible, by design (see "How recipe discovery works" in README), but it does mean a player has no in-UI nudge toward what to go find next
 
 ## World-generated traps pass (user-requested: put the traps on the map): DONE
@@ -260,15 +260,55 @@ Known gaps, intentionally deferred:
 - No skill-tree respec -- points, once spent, stay spent
 - No HUD element for individual XP-gain popups ("+12 Attack XP") -- the top bar shows aggregate Combat Lv progress and the level-up toast fires on an actual level-up, but there's no per-hit XP number floating up yet
 
-## Phase 8 — NPCs
-- [ ] Merchant, blacksmith, guide: dialogue, shop inventory, spawn conditions
+## Phase 8 — NPCs: DONE
+- [x] Three NPCs with distinct roles: **Guide** (dialogue tutorial, no shop, always present), **Merchant** (general goods + buy-back), **Blacksmith** (tools/armor)
+- [x] Dialogue panel (T to talk while in range): sequential lines, Next/Shop/Close; walking out of range closes it
+- [x] Shop inventory: coin currency earned by selling (`ItemDef.value` per item); listed prices strictly above value so buy-then-sell can't print money; infinite stock; inventory-full buy refunds the coins
+- [x] Spawn conditions: Guide always; Merchant once bag wealth >= `NPC_MERCHANT_MIN_WEALTH`; Blacksmith once `iron_bar` is discovered. Homes prefer world-generated Houses, with a surface fallback near spawn so the Guide is findable
+- [x] Arrival toast for gated NPCs; they stay once present even if the condition later fails; regenerated from conditions on load (not persisted, same as enemies)
+- [x] Headless tests (`tests/test_phase8_npcs.py`): registry/price sanity, every spawn condition both ways, house-or-fallback standing positions, dialogue wrap, buy/sell/refund/can't-sell-coins, T-to-talk and shop clicks through InputHandler, full GameApp spawn + save/load without re-announcing
+
+Known gaps, intentionally deferred:
+- NPCs stand still at their home -- no walking, day/night schedule, or physics (mining the floor out from under one leaves them floating)
+- No dedicated NPC art (flat colored humanoids + a nameplate, same gap as enemies)
+- Shops have infinite stock and no unique-to-NPC items beyond convenience/gear-access; Coin has no sink besides shops
+- The player cannot build housing for NPCs -- they use world-generated Houses (or a surface fallback)
+- Guide dialogue is static, not branching on player progress
+
+## Personal Chest (user-requested): DONE
+- [x] Craftable Personal Chest (`tile_registry.PERSONAL_CHEST_ID`, 8 Wood, anywhere): place it, press **T** nearby to open a bag/stash transfer UI. Every chest shares `Player.personal_chest` (piggy-bank / ender-chest style) so breaking the tile doesn't lose stored items. Distinct from the world-loot Chest inside structures. Stash round-trips through save/load. Headless tests in `tests/test_personal_chest.py`
 
 ## Phase 9 — Progression
-- [ ] Tiered materials (wood -> stone -> iron -> steel -> magic) unlocking new tools/gear/mechanics, not just bigger numbers
-- [ ] More equipment slots (legs, boots, accessory) and higher armor tiers -- the equip system and UI already support this, see "Equipment & UI pass" above
+- [x] More equipment slots: **Legs** and **Boots** (Accessory already existed). Character-sheet column compacted to fit 5 slots
+- [x] Armor ladder **Wood -> Iron -> Steel** for Head/Body/Legs/Boots (each slot's defense strictly increases). Wood Greaves/Boots craft from wood; Iron/Steel sets need their bars at a Workbench
+- [x] Next material tier after iron: **Steel Bar** (re-smelt 2 Iron Bars + 2 Coal at a Furnace) crafts a **Steel Pickaxe** (mining_power 7, above Iron's 5) and the Steel armor set. Blacksmith sells Wood Greaves and the Steel Pickaxe as a coin shortcut
+- [x] Magic-tier: **Arcane Bar** (Workbench: 1 Topaz + 1 Sapphire + 1 Emerald Bar). Crafts an **Arcane Pickaxe** (mining_power 9 + 25% extra drop), an **Arcane Staff** (no-ammo Magic bolt, straight flight, trains Magic), and an **Arcane Helm** (defense above steel, emits light while worn so caves don't need a torch trail)
 
-## Phase 10 — Bosses
-- [ ] First original boss: health bar, phases, distinct attack patterns, summon condition, exclusive drops
+## Phase 10 — Bosses: DONE
+- [x] First original boss, the **Slime King** (`ai_type=AIType.BOSS`, a new `Boss(Enemy)` subclass with its own `boss_ai.py`): a persistent top-of-screen health bar with a phase label, shown from the moment it's summoned (not just once damaged, like the small per-enemy bar)
+- [x] Three health-ratio phases, each strictly adding to the last: **Phase 1** (>66%) hops toward the player, contact damage only. **Phase 2** (<=66%) adds a gravity-arced **Slime Lob** ranged projectile (`EnemyProjectile`/`combat_system.update_enemy_projectiles`, the enemy-owned mirror of the player's `Projectile`). **Phase 3** (<=33%) enrages once -- summons 2 regular Slimes, hops/lobs faster, and every landing triggers a radius **shockwave** (`Boss.stomp_pending` / `combat_system.resolve_boss_stomp`) that can hit the player without a direct hitbox overlap
+- [x] Summon condition: craft a **Slime Core Idol** (Workbench: 20 Slime Gel + 5 Iron Bar) and press **G** (`Player.use_selected_summon_item` -> `GameApp.try_summon_boss`) to spawn it beside the player; blocked while one is already active so idols can't be wasted
+- [x] Exclusive drops: guaranteed **Slime King's Core** (`drop_chance=1.0`) plus a coin bounty (`BOSS_COIN_BOUNTY`). The Core isn't a dead end -- it crafts into the **Crown of the Slime King** (Workbench: 1 Core + 3 Steel Bar), the best head armor in the game (defense above the Arcane Helm)
+- [x] Headless tests (`tests/test_phase10_boss.py`, 16 tests): registry/spawner safety (a boss is never picked by `EnemySpawner`'s weighted roll), idol consumption, summon blocking while one is active, phase transitions and their distinct attacks (ranged lob, one-shot enrage minions, landing stomp), enemy-projectile collision/defense/expiry, and the exclusive-drop + coin-bounty payout on defeat. Plus a full real-game-loop smoke test (summon -> fast-forward to phase 3 -> minions spawned, player takes real damage)
+
+Known gaps, intentionally deferred:
+- Only one boss exists -- no arena/gate mechanic keeps the player from wandering off mid-fight, and there's no cross-boss progression curve yet
+- The boss isn't validated to spawn on solid ground (same "just spawn at the player's position" simplicity the Summoner's summon rod already uses) -- summoning right at a cliff edge or underground could drop/wedge it awkwardly
+- No dedicated boss art (a scaled-up flat vector shape with a crown flourish, same no-sprite-art gap enemies/NPCs already have) or audio cues (roar, phase-transition sting)
+- Bosses aren't persisted across save/load, same transience as regular enemies/projectiles (see save_system.py) -- reloading mid-fight discards it (the idol is already consumed, though, so the player fully loses that attempt)
+
+## UI reskin (user-requested: review a supplied asset pack in assets/validar for usable sprites): DONE
+- [x] Surveyed `assets/validar` (a top-down zombie-survival pack): its character/enemy/nature art is drawn top-down and is thematically a shooter, so none of it fits this side-view fantasy-mining game -- see README "How the UI theme works". Its `UI/` folder, plain 2D chrome with no perspective to clash, reskins every panel/button/slot in the game instead
+- [x] Health bar: the flat rectangle became a proportional bar drawn from the pack's heart-tipped `HP-Bar.png` frame + `HP.png` fill strip (`Renderer._draw_hp_frame_bar`), shared by the player HUD bar and the Phase 10 boss bar so both read as the same UI language
+- [x] Every panel (Inventory/Crafting/Skills/Personal Chest/NPC dialogue -- all share `_draw_panel_chrome`) now renders a 9-sliced wood/stone frame (`Renderer._draw_nine_slice`, generic and cached) instead of a flat rounded rect, at each panel's own size with no layout changes
+- [x] Every item slot (bag, equipment, hotbar, crafting grid cell, chest, NPC shop bag -- `_draw_item_slot` plus the hotbar/recipe-cell call sites) now draws the pack's cell texture (a distinct "chosen" variant for the selected/highlighted slot) with the existing rarity/status-colored border kept on top, so ready/missing/needs-station color-coding still reads at a glance
+- [x] Every button (title screen, pause menu + its Settings sub-screen, NPC dialogue Shop/Next/Talk/Close) now draws a wood-plank button (`_draw_ui_button`), swapping in the pack's own "pressed" art on hover; buttons whose baked-in text already matches the action (Play/Save/Load/Settings/Quit) skip drawing a redundant label, the rest use the textless "Blank" plank with a drawn label. Pause buttons changed from square icon buttons to landscape plaques (`PAUSE_BUTTON_WIDTH/HEIGHT`) to match the art's own proportions
+- [x] Removed the now-fully-unused `assets/Menu/Buttons/Menu_jogo` icon loader (`load_menu_button_icons`/`_build_save_icon`/`_build_load_icon`) rather than leave dead code behind
+
+Known gaps, intentionally deferred:
+- A crafting panel sized for almost no discovered recipes (near-empty save) renders as a very short strip where the hovered-recipe hint text can visibly overflow its bottom edge -- a pre-existing layout quirk (the flat-rect version had the same tiny panel, just less visually obvious), not something this pass introduced or fixed
+- The Skills screen's per-node tree cards and per-skill XP row list still use the old flat-rect look (only the outer panel/header was reskinned) -- lower priority since they're plain text lists, not slot grids
+- No dedicated boss/enemy/player sprite art came out of this pass -- see each of those "Known gaps" sections above; the validar pack's character art doesn't fit (see the survey note above)
 
 ## Cross-cutting (ongoing, not a phase)
 - [ ] Audio architecture (music/sfx hooks) — not blocking on final audio assets

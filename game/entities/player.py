@@ -1,5 +1,6 @@
 """Player entity: movement, gravity, tile collision, health, mining."""
 import logging
+import random
 from typing import Optional, Tuple
 
 from game.entities.entity import Entity
@@ -17,10 +18,12 @@ from game.settings import (
     PLAYER_HIT_INVULNERABILITY_S, PLAYER_REGEN_RATE_HP_PER_S,
     PLAYER_REGEN_DELAY_AFTER_DAMAGE_S, FAN_RANGE_TILES, MINING_XP_PER_BREAK,
     GRAPPLE_PULL_SPEED, GRAPPLE_ARRIVAL_DISTANCE_TILES, GRAPPLE_COOLDOWN_S,
+    PERSONAL_CHEST_SLOTS,
 )
 from game.entities import character_registry, class_registry
 from game.world.world import World
 from game.world import tile_registry
+from game.rendering.damage_numbers import queue_popup
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,10 @@ class Player(Entity):
         self.inventory.add_item("grapple_hook", 1)
         self.equipment.equip_from_inventory(self.inventory, "grapple_hook")
         self.skills = Skills()
+        # Shared across every placed Personal Chest -- contents live on
+        # the player, not the tile (breaking/replacing a chest doesn't
+        # dump or lose the stash).
+        self.personal_chest = Inventory(PERSONAL_CHEST_SLOTS)
 
         # Item ids the player has ever obtained (mined/looted/crafted), even
         # if none are currently in the bag -- drives which recipes are
@@ -78,6 +85,7 @@ class Player(Entity):
         # meaningful "resume" on load.
         self.hook_target: Optional[Tuple[float, float]] = None
         self.hook_cooldown_remaining = 0.0
+        self.pending_damage_popups = []
 
     # --- input-facing intent ---
     def move_left(self) -> None:
@@ -290,6 +298,7 @@ class Player(Entity):
     def take_damage(self, amount: float) -> None:
         if not self.alive:
             return
+        queue_popup(self, amount)
         self.health -= amount
         self.regen_delay_remaining = PLAYER_REGEN_DELAY_AFTER_DAMAGE_S
         logger.info("Player took %.1f damage (hp=%.1f)", amount, self.health)
@@ -349,6 +358,20 @@ class Player(Entity):
         self.inventory.remove_from_selected(1)
         return True
 
+    def use_selected_summon_item(self) -> Optional[str]:
+        """Consumes the selected hotbar item if it's a boss idol
+        (summons_boss_id set), mirroring eat_selected's shape. Returns the
+        EnemyDef id to spawn, or None if nothing happened -- GameApp does
+        the actual spawning (it owns world/enemies, Player doesn't)."""
+        selected = self.inventory.get_selected_item()
+        if selected is None:
+            return None
+        item_def = item_registry.get(selected.item_id)
+        if item_def.summons_boss_id is None:
+            return None
+        self.inventory.remove_from_selected(1)
+        return item_def.summons_boss_id
+
     # --- mining ---
     def mining_power_against(self, tile_id: int) -> float:
         tile_def = tile_registry.get(tile_id)
@@ -362,6 +385,18 @@ class Player(Entity):
             ):
                 base_power = max(base_power, item_def.mining_power)
         return base_power * self.skills.mining_power_multiplier()
+
+    def mining_drop_quantity(self, rng=None) -> int:
+        """1, or 2 when the selected tool's fortune_chance rolls. `rng` is
+        a 0..1 callable so tests can force a hit or miss."""
+        selected = self.inventory.get_selected_item()
+        if selected is None:
+            return 1
+        chance = item_registry.get(selected.item_id).fortune_chance
+        if chance <= 0:
+            return 1
+        roll = (rng or random.random)()
+        return 2 if roll < chance else 1
 
     def is_in_reach(self, tile_x: int, tile_y: int) -> bool:
         dx = (tile_x + 0.5) * TILE_SIZE - self.center_x

@@ -111,22 +111,39 @@ def test_contact_damage_is_reduced_by_equipped_defense():
 
 
 def test_armor_recipes_are_registered_and_reference_real_items():
-    helmet_recipe = recipe_registry.get("wood_helmet")
-    armor_recipe = recipe_registry.get("wood_armor")
-    for recipe in (helmet_recipe, armor_recipe):
+    for recipe_id in ("wood_helmet", "wood_armor", "wood_greaves", "wood_boots"):
+        recipe = recipe_registry.get(recipe_id)
         item_registry.get(recipe.result_item_id)
         for item_id, qty in recipe.ingredients:
             item_registry.get(item_id)
             assert qty > 0
 
 
+def test_legs_and_boots_equip_like_head_and_body():
+    player = Player(0, 0)
+    player.inventory.add_item("wood_greaves", 1)
+    player.inventory.add_item("wood_boots", 1)
+    assert player.equipment.equip_from_inventory(player.inventory, "wood_greaves")
+    assert player.equipment.equip_from_inventory(player.inventory, "wood_boots")
+    assert player.equipment.get("legs") == "wood_greaves"
+    assert player.equipment.get("boots") == "wood_boots"
+    assert player.inventory.count_item("wood_greaves") == 0
+    assert player.inventory.count_item("wood_boots") == 0
+
+
 def test_armor_items_have_equip_slot_and_defense():
     helmet = item_registry.get("wood_helmet")
     armor = item_registry.get("wood_armor")
+    greaves = item_registry.get("wood_greaves")
+    boots = item_registry.get("wood_boots")
     assert helmet.equip_slot == "head"
     assert armor.equip_slot == "body"
+    assert greaves.equip_slot == "legs"
+    assert boots.equip_slot == "boots"
     assert helmet.defense > 0
     assert armor.defense > 0
+    assert greaves.defense > 0
+    assert boots.defense > 0
 
 
 # --- inventory screen layout (click hit-testing must match what's drawn) ---
@@ -152,7 +169,7 @@ def test_equipment_and_bag_slot_rects_do_not_overlap():
 
 def test_equipment_slot_at_screen_pos_matches_rect():
     from game.rendering.renderer import equipment_slot_rect, equipment_slot_at_screen_pos
-    for slot_name in ("head", "body"):
+    for slot_name in ("head", "body", "legs", "boots", "accessory"):
         rect = equipment_slot_rect(slot_name)
         assert equipment_slot_at_screen_pos(rect.center) == slot_name
     assert equipment_slot_at_screen_pos((0, 0)) is None

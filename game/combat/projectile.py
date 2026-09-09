@@ -6,7 +6,10 @@ from game.settings import TILE_SIZE, PROJECTILE_SIZE_TILES, PROJECTILE_LIFETIME_
 
 
 class Projectile(Entity):
-    def __init__(self, x_px: float, y_px: float, x_vel: float, y_vel: float, damage: float):
+    def __init__(
+        self, x_px: float, y_px: float, x_vel: float, y_vel: float, damage: float,
+        *, uses_magic: bool = False, affected_by_gravity: bool = True,
+    ):
         size = PROJECTILE_SIZE_TILES * TILE_SIZE
         super().__init__(x_px, y_px, size, size)
         self.x_vel = x_vel
@@ -14,3 +17,5 @@ class Projectile(Entity):
         self.damage = damage
         self.time_remaining = PROJECTILE_LIFETIME_S
         self.alive = True
+        self.uses_magic = uses_magic
+        self.affected_by_gravity = affected_by_gravity

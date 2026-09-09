@@ -257,6 +257,7 @@ def test_game_app_equip_and_fire_hook_through_real_input_and_render():
 
     app = GameApp(seed=DEFAULT_SEED)
     try:
+        app.title_open = False
         app.character_select_open = False
         app.class_select_open = False
 

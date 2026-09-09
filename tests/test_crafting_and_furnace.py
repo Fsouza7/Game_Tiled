@@ -162,6 +162,15 @@ def test_iron_pickaxe_recipe_uses_iron_bar():
     assert item_registry.get("iron_pickaxe").mining_power > item_registry.get("stone_pickaxe").mining_power
 
 
+def test_steel_pickaxe_is_the_next_mining_tier_after_iron():
+    recipe = recipe_registry.get("steel_pickaxe")
+    ingredient_ids = {item_id for item_id, _ in recipe.ingredients}
+    assert "steel_bar" in ingredient_ids
+    assert item_registry.get("steel_pickaxe").mining_power > item_registry.get("iron_pickaxe").mining_power
+    smelt = smelt_registry.get("steel_bar")
+    assert smelt.ore_item_id == "iron_bar"
+
+
 def test_every_ore_has_a_smelt_recipe_into_a_registered_bar_item():
     for smelt_recipe in smelt_registry.all_recipes():
         bar_item = item_registry.get(smelt_recipe.bar_item_id)

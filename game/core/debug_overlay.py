@@ -13,7 +13,7 @@ class DebugOverlay:
     def toggle(self) -> None:
         self.enabled = not self.enabled
 
-    def draw(self, window, clock, player, world, camera, enemies=(), world_clock=None) -> None:
+    def draw(self, window, clock, player, world, camera, enemies=(), world_clock=None, npcs=()) -> None:
         if not self.enabled:
             return
         tile_x = int(player.center_x // TILE_SIZE)
@@ -28,7 +28,7 @@ class DebugOverlay:
             f"HP: {player.health:.0f}/{player.max_health}"
             + (" (regen)" if player.is_regenerating() else f" (regen in {player.regen_delay_remaining:.1f}s)" if player.regen_delay_remaining > 0 else ""),
             f"Zoom: {camera.zoom:.2f}",
-            f"Enemies: {len(enemies)}",
+            f"Enemies: {len(enemies)}  NPCs: {len(npcs)}",
             f"Biome: {biome_at(world.seed, tile_x).name}",
         ]
         if world_clock is not None:

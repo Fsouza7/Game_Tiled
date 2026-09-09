@@ -1,10 +1,13 @@
-"""Save/load: seed, player state, world clock, in-progress furnace jobs,
-and modified chunks only -- diffed against the procedural baseline, not
-saved whole (see `_chunk_diff`). No NPCs to persist yet (none exist).
+"""Save/load: seed, player state (including personal-chest stash), world
+clock, in-progress furnace jobs, and modified chunks only -- diffed
+against the procedural baseline, not saved whole (see `_chunk_diff`).
+NPCs are not persisted: they're regenerated from spawn conditions + house
+assignment on load (see game/npcs/npc_spawner.py), same
+transient/regenerable treatment as enemies.
 
 Single save slot (`SAVE_FILE_PATH`), matching this project's consistently
 minimal scope elsewhere (one world per run, no save-file picker UI). Not
-persisted: enemies, projectiles, particles, notifications -- all
+persisted: enemies, NPCs, projectiles, particles, notifications -- all
 transient/regenerable, same as after Restart already discards them.
 
 `serialize`/`deserialize` are pure (no file I/O) so they're testable on
@@ -74,6 +77,9 @@ def serialize(world: World, player: Player, world_clock: WorldClock, furnace_man
                 }
                 for skill_id in SKILL_IDS
             },
+            "personal_chest": [
+                {"item_id": s.item_id, "quantity": s.quantity} for s in player.personal_chest.slots
+            ],
         },
         "furnace_jobs": [
             {
@@ -123,6 +129,12 @@ def deserialize(data: dict) -> Tuple[World, Player, WorldClock, FurnaceManager]:
     player.discovered_item_ids = set(pdata["discovered_item_ids"])
     for skill_id, skill_data in pdata.get("skills", {}).items():
         player.skills.restore_state(skill_id, skill_data["xp"], set(skill_data["unlocked_node_ids"]))
+    for index, saved_slot in enumerate(pdata.get("personal_chest", [])):
+        if index >= len(player.personal_chest.slots):
+            break
+        player.personal_chest.slots[index] = Slot(
+            item_id=saved_slot["item_id"], quantity=saved_slot["quantity"],
+        )
 
     furnace_manager = FurnaceManager()
     for j in data["furnace_jobs"]:

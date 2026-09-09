@@ -8,6 +8,7 @@ class AIType(Enum):
     WALK = "walk"    # ground patrol, turns at walls/ledges, chases on sight
     HOP = "hop"      # periodic jumps, ground-bound (slime-style)
     FLY = "fly"      # ignores gravity, hovers/bobs, chases on sight
+    BOSS = "boss"    # multi-phase boss AI (see game/entities/boss_ai.py); never spawns via EnemySpawner
 
 
 class SpawnTime(Enum):

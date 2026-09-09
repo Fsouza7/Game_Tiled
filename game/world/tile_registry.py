@@ -52,6 +52,7 @@ FURNACE_ID = 35
 FIRE_ID = 36
 ARROW_TRAP_ID = 37
 CHEST_ID = 38
+PERSONAL_CHEST_ID = 39
 
 _TILES: Dict[int, TileDef] = {}
 
@@ -336,6 +337,15 @@ _register(TileDef(
     color=(140, 95, 45), solid=True, resistance=1.2, required_tool=None,
     drop_item_id=None, can_place=False, can_break=True,
     drop_pool=("iron_bar", "topaz", "sapphire", "emerald", "iron_pickaxe", "wood_sword", "wood_helmet"),
+))
+
+# Player-craftable storage: opening any placed one accesses the same
+# player-bound stash (see Player.personal_chest). Breaking the tile
+# drops the item; the stash itself is not in the tile.
+_register(TileDef(
+    id=PERSONAL_CHEST_ID, name="Personal Chest", category=TileCategory.STRUCTURAL,
+    color=(165, 120, 55), solid=True, resistance=1.2, required_tool=None,
+    drop_item_id="personal_chest", can_place=True, can_break=True,
 ))
 
 

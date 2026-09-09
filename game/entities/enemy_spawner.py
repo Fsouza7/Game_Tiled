@@ -5,11 +5,12 @@ from typing import List, Optional
 
 from game.entities.enemy import Enemy
 from game.entities import enemy_registry
-from game.entities.enemy_def import SpawnTime
+from game.entities.enemy_def import SpawnTime, AIType
 from game.settings import (
     TILE_SIZE, ENEMY_MAX_ALIVE, ENEMY_SPAWN_INTERVAL_S,
     ENEMY_SPAWN_MIN_DISTANCE_TILES, ENEMY_SPAWN_MAX_DISTANCE_TILES,
     ENEMY_DESPAWN_DISTANCE_TILES, WORLD_WIDTH_TILES,
+    FLYING_SPAWN_HEIGHT_TILES,
 )
 from game.world.world import World
 from game.world.world_generator import biome_at
@@ -53,15 +54,19 @@ class EnemySpawner:
         if enemy_def is None:
             return None
 
-        surface_y = world.surface_spawn_y(spawn_x) + 1  # grass row
-        spawn_y = surface_y - 1  # just above the ground
-
+        spawn_y = _spawn_y_tiles(world, spawn_x, enemy_def)
         return Enemy(enemy_def, spawn_x * TILE_SIZE, spawn_y * TILE_SIZE)
 
     def _pick_weighted_enemy(self, is_night: bool, biome_id: Optional[str] = None):
         eligible = [
             e for e in enemy_registry.all_enemies()
-            if self._matches_time(e.spawn_time, is_night) and self._matches_biome(e.biome_id, biome_id)
+            # Bosses are never randomly spawned -- only GameApp.try_summon_boss
+            # constructs one, from a boss idol (see enemy_registry.py's
+            # slime_king entry, whose spawn_weight=0.0 already makes this
+            # redundant -- kept explicit so a future boss can't be picked
+            # here just by forgetting to zero its spawn_weight).
+            if e.ai_type != AIType.BOSS
+            and self._matches_time(e.spawn_time, is_night) and self._matches_biome(e.biome_id, biome_id)
         ]
         if not eligible:
             return None
@@ -77,3 +82,15 @@ class EnemySpawner:
     @staticmethod
     def _matches_biome(enemy_biome_id: Optional[str], current_biome_id: Optional[str]) -> bool:
         return enemy_biome_id is None or enemy_biome_id == current_biome_id
+
+
+def _spawn_y_tiles(world: World, spawn_x: int, enemy_def) -> int:
+    """Ground mobs sit on the grass; flyers hover above it (and above trees)."""
+    surface_y = world.surface_spawn_y(spawn_x) + 1  # grass row
+    spawn_y = surface_y - 1  # just above the ground
+    if enemy_def.ai_type != AIType.FLY:
+        return spawn_y
+    spawn_y -= FLYING_SPAWN_HEIGHT_TILES
+    while spawn_y > 1 and world.is_solid(spawn_x, spawn_y):
+        spawn_y -= 1
+    return spawn_y

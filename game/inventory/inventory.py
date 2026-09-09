@@ -83,3 +83,23 @@ class Inventory:
         screen's right-click "send to selected hotbar slot" action. A
         no-op if index_a == index_b (e.g. the item is already there)."""
         self.slots[index_a], self.slots[index_b] = self.slots[index_b], self.slots[index_a]
+
+
+def transfer_stack(source: Inventory, source_index: int, dest: Inventory) -> int:
+    """Moves as much of source.slots[source_index] as dest can hold.
+    Returns how many items actually moved (0 if empty or dest is full)."""
+    if source_index < 0 or source_index >= len(source.slots):
+        return 0
+    slot = source.slots[source_index]
+    if slot.is_empty:
+        return 0
+    item_id = slot.item_id
+    quantity = slot.quantity
+    leftover = dest.add_item(item_id, quantity)
+    moved = quantity - leftover
+    if leftover <= 0:
+        slot.item_id = None
+        slot.quantity = 0
+    else:
+        slot.quantity = leftover
+    return moved
