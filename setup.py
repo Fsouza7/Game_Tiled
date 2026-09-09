@@ -6,7 +6,7 @@ from settings import *
 from Logics.Colisoes import *
 from Logics.Menu import *
 
-offset_x = 0
+offset_x = 300
 scroll_area_width = 800
 
 pygame.init()
@@ -50,10 +50,12 @@ def main(window):
     clock = pygame.time.Clock()
     background, bg_image = get_background("Yellow.png")
     resized_button_images = load_button_images()
+    offset_x = 300
     block_size = 66
     apples.clear()
     fires.clear()
     objects.clear()
+    fans.clear()
     for row_index, row in enumerate(level_map):
         for col_index, cell in enumerate(row):
             x = col_index * block_size
@@ -75,6 +77,11 @@ def main(window):
             elif cell == "l":
                 block = Block.Block(x, y, block_size, "decor")
                 objects.append(block)
+            elif cell == "v":
+                fan = Fan.Fan(x, y, 24, 8)
+                objects.append(fan)
+                fans.append(fan)
+
 
     run = True
     show_menu = False
@@ -97,7 +104,7 @@ def main(window):
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Clique do botão esquerdo do mouse
                     click_pos = pygame.mouse.get_pos()
-                    handle_menu_click(main(window), button_infos, click_pos)
+                    handle_menu_click(main, button_infos, click_pos)
 
         keys = pygame.key.get_pressed()
 
@@ -108,6 +115,10 @@ def main(window):
             for fir in fires:
                 fir.on()
                 fir.loop()
+            for fan in fans:
+                fan.on()
+                fan.loop()
+
             handle_move(player, objects)
 
             if ((player.rect.right - offset_x >= WIDTH - scroll_area_width) and player.x_vel > 0) or (
@@ -119,6 +130,7 @@ def main(window):
         menu_clock.tick()
         if show_menu and is_paused:  # Exibir o menu somente quando estiver pausado
             menu_offset += 1
+            clock.tick(60)
             draw_menu(window, resized_button_images,menu_offset)
         pygame.display.flip()
 

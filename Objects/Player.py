@@ -12,7 +12,7 @@ class Player(pygame.sprite.Sprite):
         from setup import load_sprite_sheets
         super().__init__()
         self.rect = pygame.Rect(x, y, width, height)
-        self.SPRITES = load_sprite_sheets("MainCharacters", "VirtualGuy", 32, 32, True)
+        self.SPRITES = load_sprite_sheets("MainCharacters", "NinjaFrog", 32, 32, True)
         self.x_vel = 0
         self.y_vel = 0
         self.mask = None

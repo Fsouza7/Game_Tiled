@@ -15,6 +15,7 @@ def handle_vertical_collision(player, objects, dy):
                 player.rect.bottom = obj.rect.top
                 player.landed()
             elif dy < 0:
+
                 if obj.name == "apple":
                     # Ignora a colisão com a maçã
                     continue
