@@ -147,9 +147,10 @@ def test_standing_on_spikes_damages_the_player():
     chunk.set_tile(tile_x % 32, tile_y, SPIKES_ID)
 
     health_before = player.health
+    expected_damage = SPIKES_CONTACT_DAMAGE - combat_system.player_total_defense(player)
     combat_system.resolve_hazard_damage(player, world)
 
-    assert player.health == health_before - SPIKES_CONTACT_DAMAGE
+    assert player.health == health_before - expected_damage
     assert player.is_invulnerable()
 
 

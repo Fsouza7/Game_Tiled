@@ -3,12 +3,13 @@
 Kept separate from Inventory/World/Player so the UI layer (renderer/input)
 never has to know how station-proximity or ingredient-checking works.
 """
+import random
 from typing import List
 
 from game.crafting.recipe import RecipeDef
 from game.crafting import recipe_registry
 from game.inventory.inventory import Inventory
-from game.settings import TILE_SIZE, STATION_SEARCH_RADIUS_TILES
+from game.settings import TILE_SIZE, STATION_SEARCH_RADIUS_TILES, CRAFTING_XP_PER_CRAFT, CRAFTING_RESOURCEFUL_CHANCE
 from game.world.world import World
 
 
@@ -71,12 +72,18 @@ def collect_and_discover(player, item_id: str, quantity: int) -> List[RecipeDef]
 def craft_and_discover(recipe: RecipeDef, player, world: World):
     """Like craft(), but on success also marks recipe.result_item_id as
     discovered (crafting something for the first time counts as having
-    obtained it) and returns any further recipes that just became
-    discovered as a result. Returns (success, newly_discovered_recipes)."""
+    obtained it), grants Crafting XP (boosted by the Crafting skill's own
+    "crafting_master" node), rolls a "crafting_resourceful" ingredient
+    refund if that node is unlocked, and returns any further recipes that
+    just became discovered as a result. Returns (success, newly_discovered_recipes)."""
     before = _discovered_recipe_ids(player.discovered_item_ids)
     if not craft(recipe, player.inventory, world, player.center_x, player.center_y):
         return False, []
     player.discovered_item_ids.add(recipe.result_item_id)
+    player.skills.add_xp("crafting", CRAFTING_XP_PER_CRAFT * player.skills.crafting_xp_multiplier())
+    if player.skills.has_node("crafting_resourceful") and random.random() < CRAFTING_RESOURCEFUL_CHANCE:
+        refund_item_id, refund_qty = random.choice(recipe.ingredients)
+        player.inventory.add_item(refund_item_id, refund_qty)
     return True, _newly_discovered_recipes(before, player.discovered_item_ids)
 
 

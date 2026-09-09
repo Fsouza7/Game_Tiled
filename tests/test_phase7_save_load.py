@@ -25,6 +25,8 @@ def test_round_trip_preserves_player_state():
     player.inventory.select_hotbar(3)
     player.equipment.slots["head"] = "wood_helmet"
     player.discovered_item_ids.add("iron_bar")
+    player.skills.add_xp("attack", 5000.0)
+    player.skills.try_unlock_node("attack_keen_edge")
     world_clock = WorldClock()
     world_clock.time_of_day = 123.0
     world_clock.day_count = 4
@@ -41,6 +43,8 @@ def test_round_trip_preserves_player_state():
     assert player2.inventory.selected_hotbar_index == 3
     assert player2.equipment.slots["head"] == "wood_helmet"
     assert "iron_bar" in player2.discovered_item_ids
+    assert player2.skills.xp("attack") == player.skills.xp("attack")
+    assert player2.skills.has_node("attack_keen_edge")
     assert world_clock2.time_of_day == 123.0
     assert world_clock2.day_count == 4
 

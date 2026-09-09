@@ -10,11 +10,16 @@ from game.items import item_registry
 from game.crafting import crafting_system
 from game.crafting.smelt_recipe import SmeltRecipeDef
 from game.combat import combat_system
-from game.entities import character_registry
+from game.combat.projectile import Projectile
+from game.entities import character_registry, class_registry
+from game.entities.summon import Summon
+from game.skills.skills import SKILL_IDS
+from game.skills.skill_tree_registry import nodes_for_skill
 from game.rendering.renderer import (
     recipe_at_screen_pos, equipment_slot_at_screen_pos, inventory_bag_index_at_screen_pos,
     crafting_max_scroll, CRAFTING_SCROLL_STEP,
-    character_index_at_screen_pos, pause_button_at_screen_pos,
+    character_index_at_screen_pos, class_index_at_screen_pos, pause_button_at_screen_pos,
+    skill_index_at_screen_pos, skill_node_at_screen_pos,
 )
 
 
@@ -28,6 +33,8 @@ class InputHandler:
                 game_app.running = False
             elif game_app.character_select_open:
                 self._handle_character_select_event(event, game_app)
+            elif game_app.class_select_open:
+                self._handle_class_select_event(event, game_app)
             elif event.type == pygame.KEYDOWN:
                 self._handle_keydown(event, game_app)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.paused:
@@ -44,7 +51,11 @@ class InputHandler:
                 self._handle_crafting_click(event.pos, game_app)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.inventory_open:
                 self._handle_inventory_click(event.pos, game_app)
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not game_app.crafting_open and not game_app.inventory_open:
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3 and game_app.inventory_open:
+                self._handle_inventory_right_click(event.pos, game_app)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.skills_open:
+                self._handle_skills_click(event.pos, game_app)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not game_app.crafting_open and not game_app.inventory_open and not game_app.skills_open:
                 self._handle_attack_click(event.pos, game_app)
 
     def _handle_character_select_event(self, event, game_app) -> None:
@@ -61,6 +72,23 @@ class InputHandler:
                 game_app.player.character_id = characters[(current_index + 1) % len(characters)].id
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 game_app.character_select_open = False
+                game_app.class_select_open = True
+
+    def _handle_class_select_event(self, event, game_app) -> None:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            index = class_index_at_screen_pos(event.pos)
+            if index is not None:
+                game_app.player.class_id = class_registry.all_classes()[index].id
+        elif event.type == pygame.KEYDOWN:
+            classes = class_registry.all_classes()
+            current_index = next(i for i, c in enumerate(classes) if c.id == game_app.player.class_id)
+            if event.key in (pygame.K_LEFT, pygame.K_a):
+                game_app.player.class_id = classes[(current_index - 1) % len(classes)].id
+            elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                game_app.player.class_id = classes[(current_index + 1) % len(classes)].id
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                game_app.class_select_open = False
+                game_app.grant_class_starting_item()
 
     def _handle_pause_click(self, pos, game_app) -> None:
         action = pause_button_at_screen_pos(pos, game_app.settings_open)
@@ -116,14 +144,58 @@ class InputHandler:
             if not slot.is_empty and item_registry.get(slot.item_id).equip_slot is not None:
                 player.equipment.equip_from_inventory(player.inventory, slot.item_id)
 
+    def _handle_inventory_right_click(self, pos, game_app) -> None:
+        """Right-clicking a bag item is a quick-action shortcut: equip it
+        if it's armor, otherwise send it to whichever hotbar slot is
+        currently selected (swapping places with whatever's there) --
+        equipment slots aren't a target for this (unequip already has its
+        own left-click action)."""
+        player = game_app.player
+        bag_index = inventory_bag_index_at_screen_pos(pos, len(player.inventory.slots))
+        if bag_index is None:
+            return
+        slot = player.inventory.slots[bag_index]
+        if slot.is_empty:
+            return
+        if item_registry.get(slot.item_id).equip_slot is not None:
+            player.equipment.equip_from_inventory(player.inventory, slot.item_id)
+            return
+        player.inventory.swap_slots(bag_index, player.inventory.selected_hotbar_index)
+
+    def _handle_skills_click(self, pos, game_app) -> None:
+        skill_index = skill_index_at_screen_pos(pos)
+        if skill_index is not None:
+            game_app.selected_skill_id = SKILL_IDS[skill_index]
+            return
+
+        node_index = skill_node_at_screen_pos(pos)
+        if node_index is None:
+            return
+        nodes = nodes_for_skill(game_app.selected_skill_id)
+        if node_index >= len(nodes):
+            return
+        game_app.player.skills.try_unlock_node(nodes[node_index].id)
+
+    def _handle_use_accessory(self, game_app) -> None:
+        if game_app.paused:
+            return
+        aim_world_pos = game_app.camera.screen_to_world(*pygame.mouse.get_pos())
+        game_app.player.try_use_accessory(game_app.world, aim_world_pos)
+
     def _handle_attack_click(self, pos, game_app) -> None:
         if game_app.paused:
             return
         player = game_app.player
+        blocked_reason = player.blocked_weapon_class_reason()
+        if blocked_reason is not None:
+            game_app.notifications.push_throttled(blocked_reason)
+            return
         aim_world_pos = game_app.camera.screen_to_world(*pos)
-        projectile = combat_system.try_attack(player, game_app.world, game_app.enemies, aim_world_pos)
-        if projectile is not None:
-            game_app.projectiles.append(projectile)
+        result = combat_system.try_attack(player, game_app.world, game_app.enemies, aim_world_pos)
+        if isinstance(result, Projectile):
+            game_app.projectiles.append(result)
+        elif isinstance(result, Summon):
+            game_app.summons = [result]
 
     def _handle_keydown(self, event, game_app) -> None:
         key = event.key
@@ -132,13 +204,21 @@ class InputHandler:
                 game_app.settings_open = False
             else:
                 game_app.paused = not game_app.paused
-        elif key == pygame.K_e:
+        elif key == pygame.K_i:
             game_app.inventory_open = not game_app.inventory_open
             game_app.crafting_open = False
+            game_app.skills_open = False
+        elif key == pygame.K_e:
+            self._handle_use_accessory(game_app)
         elif key == pygame.K_c:
             game_app.crafting_open = not game_app.crafting_open
             game_app.inventory_open = False
+            game_app.skills_open = False
             game_app.crafting_scroll_y = 0
+        elif key == pygame.K_k:
+            game_app.skills_open = not game_app.skills_open
+            game_app.inventory_open = False
+            game_app.crafting_open = False
         elif key == pygame.K_F3:
             game_app.debug_overlay.toggle()
         elif key == pygame.K_SPACE:
@@ -166,7 +246,7 @@ class InputHandler:
             else:
                 player.stop_horizontal()
 
-        if game_app.inventory_open or game_app.crafting_open:
+        if game_app.inventory_open or game_app.crafting_open or game_app.skills_open:
             return  # freeze mining/placing while browsing a menu
 
         mouse_buttons = pygame.mouse.get_pressed(num_buttons=3)

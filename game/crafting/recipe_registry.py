@@ -80,6 +80,20 @@ _register(RecipeDef(
 ))
 
 _register(RecipeDef(
+    id="summon_rod_wood", name="Twig Rod",
+    ingredients=(("wood", 8),),
+    result_item_id="summon_rod_wood", result_quantity=1,
+    station_tile_id=None,  # lets a Summoner remake their starter rod if lost
+))
+
+_register(RecipeDef(
+    id="summon_rod_iron", name="Iron Rod",
+    ingredients=(("iron_bar", 3), ("wood", 5), ("slime_gel", 2)),
+    result_item_id="summon_rod_iron", result_quantity=1,
+    station_tile_id=WORKBENCH_ID,
+))
+
+_register(RecipeDef(
     id="wood_helmet", name="Wood Helmet",
     ingredients=(("wood", 8),),
     result_item_id="wood_helmet", result_quantity=1,
@@ -90,6 +104,13 @@ _register(RecipeDef(
     id="wood_armor", name="Wood Armor",
     ingredients=(("wood", 15),),
     result_item_id="wood_armor", result_quantity=1,
+    station_tile_id=WORKBENCH_ID,
+))
+
+_register(RecipeDef(
+    id="grapple_hook", name="Grapple Hook",
+    ingredients=(("iron_bar", 2), ("wood", 4), ("slime_gel", 2)),
+    result_item_id="grapple_hook", result_quantity=1,
     station_tile_id=WORKBENCH_ID,
 ))
 

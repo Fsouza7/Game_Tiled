@@ -5,17 +5,19 @@ import pygame
 
 from game.settings import (
     WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, FPS,
-    TILE_SIZE, DEFAULT_SEED, WORLD_WIDTH_TILES,
+    TILE_SIZE, DEFAULT_SEED, WORLD_WIDTH_TILES, HITPOINTS_HP_PER_LEVEL,
+    CRAFTING_XP_PER_SMELT,
 )
 from game.world.world import World
 from game.world import checkpoints
 from game.entities.player import Player
-from game.entities import enemy_ai, character_registry
+from game.entities import enemy_ai, summon_ai, character_registry, class_registry
 from game.entities.enemy_spawner import EnemySpawner
 from game.combat import combat_system
 from game.crafting import crafting_system
 from game.crafting.furnace_system import FurnaceManager
 from game.items import item_registry
+from game.skills.skills import SKILL_NAMES
 from game.core.camera import Camera
 from game.core.debug_overlay import DebugOverlay
 from game.core.world_clock import WorldClock
@@ -42,22 +44,26 @@ class GameApp:
         self.debug_overlay = DebugOverlay()
 
         # Shown once at startup; Player already exists with the default
-        # skin so gameplay systems never have to special-case "no player
-        # yet" -- picking a character just swaps player.character_id.
+        # skin/class so gameplay systems never have to special-case "no
+        # player yet" -- picking a character/class just swaps
+        # player.character_id/class_id. Class select follows character
+        # select (see step()'s early-return gate below).
         self.character_select_open = True
+        self.class_select_open = False
         self.running = True
 
-        self._new_run(seed, character_registry.DEFAULT_CHARACTER_ID)
+        self._new_run(seed, character_registry.DEFAULT_CHARACTER_ID, class_registry.DEFAULT_CLASS_ID)
 
         logger.info("World seed: %d", seed)
 
-    def _new_run(self, seed: int, character_id: str) -> None:
+    def _new_run(self, seed: int, character_id: str, class_id: str = class_registry.DEFAULT_CLASS_ID) -> None:
         """(Re)builds everything that represents "one playthrough" -- used
         both at startup and by the pause menu's Restart action."""
         self.world = World(seed)
         spawn_x_tile = WORLD_WIDTH_TILES // 2
         spawn_y_tile = self.world.surface_spawn_y(spawn_x_tile)
-        self.player = Player(spawn_x_tile * TILE_SIZE, spawn_y_tile * TILE_SIZE, character_id)
+        self.player = Player(spawn_x_tile * TILE_SIZE, spawn_y_tile * TILE_SIZE, character_id, class_id)
+        self.grant_class_starting_item()
 
         self.camera = Camera()
         self.camera.x = self.player.center_x - self.camera.view_width / 2
@@ -65,6 +71,7 @@ class GameApp:
 
         self.enemies = []
         self.projectiles = []
+        self.summons = []
         self.particles = ParticleSystem()
         self.enemy_spawner = EnemySpawner()
         self.world_clock = WorldClock()
@@ -77,9 +84,21 @@ class GameApp:
         self.crafting_open = False
         self.crafting_scroll_y = 0
         self.settings_open = False
+        self.skills_open = False
+        self.selected_skill_id = "attack"
 
     def restart(self) -> None:
-        self._new_run(self.seed, self.player.character_id)
+        self._new_run(self.seed, self.player.character_id, self.player.class_id)
+
+    def grant_class_starting_item(self) -> None:
+        """Grants the player's class starting item, if it has one (e.g.
+        Summoner's Twig Rod). Called from _new_run (boot/restart -- the
+        player's class_id is already correct there) and from InputHandler
+        when the class-select screen is confirmed (class_id was just set
+        directly on the player, outside of _new_run)."""
+        class_def = class_registry.get(self.player.class_id)
+        if class_def.starting_item_id is not None:
+            self.player.collect_item(class_def.starting_item_id, 1)
 
     def save_game(self) -> None:
         # Reads save_system.SAVE_FILE_PATH at call time (not via the
@@ -109,6 +128,7 @@ class GameApp:
 
         self.enemies = []
         self.projectiles = []
+        self.summons = []
         self.particles = ParticleSystem()
         self.enemy_spawner = EnemySpawner()
         self._dust_step_cooldown = 0.0
@@ -118,6 +138,8 @@ class GameApp:
         self.crafting_open = False
         self.crafting_scroll_y = 0
         self.settings_open = False
+        self.skills_open = False
+        self.selected_skill_id = "attack"
 
         self.notifications.push("Game loaded")
         logger.info("Loaded game from %s", save_system.SAVE_FILE_PATH)
@@ -132,12 +154,14 @@ class GameApp:
         events = pygame.event.get()
         self.input_handler.handle_discrete_events(events, self)
 
-        if self.character_select_open:
+        if self.character_select_open or self.class_select_open:
             self.renderer.draw(
                 self.window, self.world, self.player, self.camera,
                 self.enemies, self.projectiles, self.world_clock, self.particles,
                 self.inventory_open, self.crafting_open, self.paused, self.crafting_scroll_y,
-                settings_open=self.settings_open, character_select_open=True,
+                settings_open=self.settings_open,
+                character_select_open=self.character_select_open,
+                class_select_open=self.class_select_open,
             )
             pygame.display.flip()
             return
@@ -152,10 +176,13 @@ class GameApp:
 
             for enemy in self.enemies:
                 enemy_ai.update(enemy, self.world, self.player, dt)
+            for summon in self.summons:
+                summon_ai.update(summon, self.world, self.player, self.enemies, dt)
             combat_system.resolve_contact_damage(self.player, self.enemies)
             combat_system.resolve_hazard_damage(self.player, self.world)
             combat_system.resolve_hazard_feature_damage(self.player, self.world)
-            self.projectiles = combat_system.update_projectiles(self.projectiles, self.world, self.enemies, dt)
+            combat_system.resolve_summon_attacks(self.player, self.summons, self.enemies)
+            self.projectiles = combat_system.update_projectiles(self.player, self.projectiles, self.world, self.enemies, dt)
             self._collect_enemy_drops()
             self.enemies = [e for e in self.enemies if e.alive]
             self.enemy_spawner.update(dt, self.world, self.player, self.enemies, self.world_clock.is_night)
@@ -168,12 +195,15 @@ class GameApp:
 
             self.camera.follow(self.player.center_x, self.player.center_y)
 
+        self._announce_level_ups()
+
         self.renderer.draw(
             self.window, self.world, self.player, self.camera,
             self.enemies, self.projectiles, self.world_clock, self.particles,
             self.inventory_open, self.crafting_open, self.paused,
             self.crafting_scroll_y, settings_open=self.settings_open, character_select_open=False,
             furnace_manager=self.furnace_manager, notifications=self.notifications,
+            summons=self.summons, skills_open=self.skills_open, selected_skill_id=self.selected_skill_id,
         )
         self.debug_overlay.draw(self.window, self.clock, self.player, self.world, self.camera, self.enemies, self.world_clock)
         pygame.display.flip()
@@ -199,6 +229,14 @@ class GameApp:
         for item_id, quantity in self.furnace_manager.update(dt):
             self.notifications.push(f"{quantity}x {item_registry.get(item_id).name} ready!")
             self._collect_and_announce(item_id, quantity)
+            self.player.skills.add_xp("crafting", CRAFTING_XP_PER_SMELT * self.player.skills.crafting_xp_multiplier())
+
+    def _announce_level_ups(self) -> None:
+        for skill_id, level in self.player.skills.drain_level_ups():
+            if skill_id == "hitpoints":
+                self.player.max_health += HITPOINTS_HP_PER_LEVEL
+                self.player.health += HITPOINTS_HP_PER_LEVEL
+            self.notifications.push(f"{SKILL_NAMES[skill_id]} level up! Lv {level}")
 
     def _update_footstep_dust(self, dt: float) -> None:
         self._dust_step_cooldown = max(0.0, self._dust_step_cooldown - dt)

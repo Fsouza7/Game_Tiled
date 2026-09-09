@@ -58,6 +58,13 @@ PLAYER_REACH_TILES = 6.0
 PLAYER_PLACE_COOLDOWN_S = 0.15
 PLAYER_MINE_TICK_S = 0.05
 
+# --- Grapple Hook (accessory slot) ---
+GRAPPLE_MAX_RANGE_TILES = 7.0
+GRAPPLE_STEP_TILES = 0.25  # raycast step size when searching for a wall to catch
+GRAPPLE_PULL_SPEED = 11.0  # px/frame toward the anchor, same frame-based scale as PLAYER_MOVE_SPEED
+GRAPPLE_ARRIVAL_DISTANCE_TILES = 0.5
+GRAPPLE_COOLDOWN_S = 0.4
+
 # --- Health regeneration ---
 PLAYER_REGEN_RATE_HP_PER_S = 2.5
 # Any damage (contact, fall) resets this timer; regen only resumes once it
@@ -119,6 +126,34 @@ FLYING_BOB_FREQUENCY = 2.0
 # camping directly on top of the player -- otherwise it deals contact
 # damage on nearly every frame it's in melee range, with no way to avoid it.
 FLYING_STANDOFF_TILES = 1.6
+
+# --- Summons (Summoner class) ---
+SUMMON_BOB_AMPLITUDE_TILES = 0.3
+SUMMON_BOB_FREQUENCY = 3.0
+SUMMON_HOVER_HEIGHT_TILES = 1.2  # idle altitude above the player's center
+
+# --- Skills (RPG leveling -- Attack/Defense/Magic/Mining/Crafting/Hitpoints) ---
+# XP granted per action -- easy to retune later, same "pick a reasonable
+# number, document it, adjust from playtesting" approach already used for
+# e.g. MELEE_REACH_TILES's tuning passes. Bumped ~1.5x (user feedback:
+# leveling felt too slow) from the first pass's values.
+ATTACK_XP_PER_DAMAGE = 1.5
+ATTACK_KILL_BONUS_XP = 25.0
+DEFENSE_XP_PER_DAMAGE_TAKEN = 1.5
+MAGIC_XP_PER_DAMAGE = 2.25
+MINING_XP_PER_BREAK = 8.0
+CRAFTING_XP_PER_CRAFT = 12.0
+CRAFTING_XP_PER_SMELT = 9.0
+# A fraction of every Attack/Defense/Magic XP grant also goes to
+# Hitpoints, same as real RuneScape -- every combat skill trains survivability.
+HITPOINTS_XP_SHARE = 1.0 / 3.0
+HITPOINTS_HP_PER_LEVEL = 1.0
+# Per-level passive multipliers/bonuses (stack with the skill's tree nodes).
+ATTACK_DAMAGE_PCT_PER_LEVEL = 0.0075
+MAGIC_DAMAGE_PCT_PER_LEVEL = 0.009
+MINING_POWER_PCT_PER_LEVEL = 0.015
+DEFENSE_FLAT_PER_LEVEL = 0.3
+CRAFTING_RESOURCEFUL_CHANCE = 0.15
 
 # --- Hazards / interactive tiles ---
 SPIKES_CONTACT_DAMAGE = 12.0

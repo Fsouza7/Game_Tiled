@@ -339,6 +339,28 @@ _register(ItemDef(
     rarity=ItemRarity.COMMON, value=1, icon_key="arrow",
 ))
 
+# --- Summon rods (Summoner-class-only weapons; see class_registry.py and
+# game/entities/summon_registry.py). Casting one replaces the player's
+# current summon -- only one can be active at a time. ---
+
+_register(ItemDef(
+    id="summon_rod_wood", name="Twig Rod",
+    description="A crude rod bound with a scrap of slime gel. Summons a Twig Sprite to fight for you.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.COMMON, value=15, speed=1.0,
+    icon_key="summon_rod_wood",
+    is_weapon=True, is_ranged=False, weapon_class="summon", summons_id="twig_sprite",
+))
+
+_register(ItemDef(
+    id="summon_rod_iron", name="Iron Rod",
+    description="A rod forged from a smelted Iron Bar. Summons a much sturdier Iron Guardian.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.RARE, value=40, speed=1.2,
+    icon_key="summon_rod_iron",
+    is_weapon=True, is_ranged=False, weapon_class="summon", summons_id="iron_guardian",
+))
+
 # --- Armor (equip via the inventory screen; see game/inventory/equipment.py) ---
 
 _register(ItemDef(
@@ -355,6 +377,17 @@ _register(ItemDef(
     category=ItemCategory.ARMOR, max_stack=1,
     rarity=ItemRarity.UNCOMMON, value=28, max_durability=140,
     icon_key="wood_armor", equip_slot="body", defense=6.0,
+))
+
+# --- Accessory (equip via the inventory screen; unlike armor, actively
+# used with E -- see Player.try_use_accessory, game/entities/grapple.py) ---
+
+_register(ItemDef(
+    id="grapple_hook", name="Grapple Hook",
+    description="Equip in the accessory slot. Press E to fire it -- if it catches a wall, you're pulled to it and held there, making climbing much easier. Press E again (or jump) to let go.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.UNCOMMON, value=30, max_durability=None,
+    icon_key="grapple_hook", equip_slot="accessory", accessory_kind="grapple_hook",
 ))
 
 # --- Consumable: food (fully functional -- eat with F to heal; obtained

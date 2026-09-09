@@ -16,9 +16,10 @@ from typing import Optional, Tuple
 
 from game.settings import SAVE_FILE_PATH, CHUNK_WIDTH, WORLD_WIDTH_TILES
 from game.crafting.furnace_system import FurnaceManager, FurnaceJob
-from game.entities import character_registry
+from game.entities import character_registry, class_registry
 from game.entities.player import Player
 from game.inventory.inventory import Slot
+from game.skills.skills import SKILL_IDS
 from game.core.world_clock import WorldClock
 from game.world.world import World
 from game.world.world_generator import generate_column
@@ -58,6 +59,7 @@ def serialize(world: World, player: Player, world_clock: WorldClock, furnace_man
             "x": player.x, "y": player.y,
             "spawn_x": player.spawn_x, "spawn_y": player.spawn_y,
             "character_id": player.character_id,
+            "class_id": player.class_id,
             "health": player.health, "max_health": player.max_health,
             "inventory": {
                 "slots": [{"item_id": s.item_id, "quantity": s.quantity} for s in player.inventory.slots],
@@ -65,6 +67,13 @@ def serialize(world: World, player: Player, world_clock: WorldClock, furnace_man
             },
             "equipment": dict(player.equipment.slots),
             "discovered_item_ids": sorted(player.discovered_item_ids),
+            "skills": {
+                skill_id: {
+                    "xp": player.skills.xp(skill_id),
+                    "unlocked_node_ids": sorted(player.skills.unlocked_node_ids(skill_id)),
+                }
+                for skill_id in SKILL_IDS
+            },
         },
         "furnace_jobs": [
             {
@@ -96,7 +105,8 @@ def deserialize(data: dict) -> Tuple[World, Player, WorldClock, FurnaceManager]:
 
     pdata = data["player"]
     character_id = pdata.get("character_id", character_registry.DEFAULT_CHARACTER_ID)
-    player = Player(pdata["x"], pdata["y"], character_id)
+    class_id = pdata.get("class_id", class_registry.DEFAULT_CLASS_ID)
+    player = Player(pdata["x"], pdata["y"], character_id, class_id)
     player.x = pdata["x"]
     player.y = pdata["y"]
     player.spawn_x = pdata["spawn_x"]
@@ -105,8 +115,14 @@ def deserialize(data: dict) -> Tuple[World, Player, WorldClock, FurnaceManager]:
     player.max_health = pdata["max_health"]
     player.inventory.slots = [Slot(item_id=s["item_id"], quantity=s["quantity"]) for s in pdata["inventory"]["slots"]]
     player.inventory.selected_hotbar_index = pdata["inventory"]["selected_hotbar_index"]
-    player.equipment.slots = dict(pdata["equipment"])
+    # update(), not a wholesale replace, so an old save missing a newer
+    # slot (e.g. "accessory", added after this save was written) leaves
+    # that slot at the constructor's default (None) instead of vanishing
+    # from the dict entirely.
+    player.equipment.slots.update(pdata["equipment"])
     player.discovered_item_ids = set(pdata["discovered_item_ids"])
+    for skill_id, skill_data in pdata.get("skills", {}).items():
+        player.skills.restore_state(skill_id, skill_data["xp"], set(skill_data["unlocked_node_ids"]))
 
     furnace_manager = FurnaceManager()
     for j in data["furnace_jobs"]:

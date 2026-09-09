@@ -7,7 +7,7 @@ from typing import Dict, Optional
 from game.inventory.inventory import Inventory
 from game.items import item_registry
 
-SLOTS = ("head", "body")
+SLOTS = ("head", "body", "accessory")
 
 
 class Equipment:

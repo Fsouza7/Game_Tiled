@@ -197,6 +197,40 @@ def test_hotbar_selection():
     assert selected.item_id == "coal"
 
 
+def test_swap_slots_exchanges_contents():
+    inv = Inventory()
+    inv.slots[2].item_id = "coal"
+    inv.slots[2].quantity = 5
+    inv.slots[7].item_id = "wood"
+    inv.slots[7].quantity = 2
+
+    inv.swap_slots(2, 7)
+
+    assert inv.slots[2].item_id == "wood" and inv.slots[2].quantity == 2
+    assert inv.slots[7].item_id == "coal" and inv.slots[7].quantity == 5
+
+
+def test_swap_slots_with_an_empty_slot_moves_the_item():
+    inv = Inventory()
+    inv.slots[0].item_id = "coal"
+    inv.slots[0].quantity = 3
+
+    inv.swap_slots(0, 5)
+
+    assert inv.slots[0].is_empty
+    assert inv.slots[5].item_id == "coal" and inv.slots[5].quantity == 3
+
+
+def test_swap_slots_with_itself_is_a_no_op():
+    inv = Inventory()
+    inv.slots[1].item_id = "coal"
+    inv.slots[1].quantity = 4
+
+    inv.swap_slots(1, 1)
+
+    assert inv.slots[1].item_id == "coal" and inv.slots[1].quantity == 4
+
+
 # --- player physics ---
 
 def test_player_gravity_lands_on_ground():

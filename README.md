@@ -8,7 +8,8 @@ game code, names or maps are reused. Real sprite art from the bundled
 reuse" below); none of it drives gameplay data, and every reuse is
 documented rather than pretended away.
 
-> **Status: Phase 6 (biomes) + Deferred-assets pass 2 + Crafting UX pass**
+> **Status: Phase 6 (biomes) + Deferred-assets pass 2 + Crafting UX pass +
+> Phase 7 (structures + save/load) + Summoner class + RPG skill/leveling system**
 > — see `TODO.md` for the full roadmap and what is/isn't implemented yet.
 
 This repository also contains an older, unrelated fixed-level platformer
@@ -67,13 +68,25 @@ crumble/respawn/timer-reset, Checkpoint activation/respawn, moving-hazard
 spawn coverage/oscillation/contact damage, particle expiry), and the
 crafting UX pass (recipe discovery locking/unlocking and the newly-
 discovered-recipe diff, the blocked-mining message for every reach/tool
-case, and the furnace's start/busy/complete/restart smelt-job lifecycle).
+case, and the furnace's start/busy/complete/restart smelt-job lifecycle),
+the Summoner class (class/summon registry sanity, the weapon_class
+gate blocking attacks both ways, casting-then-replacing a summon through
+the real input path, a summon chasing/damaging a nearby enemy and hovering
+near the player otherwise, the class-select screen's click+confirm path,
+and a full app boot through both select screens), and the skill/leveling
+system (the XP curve against known reference values, level-up queuing,
+skill-tree gating, every multiplier/bonus helper, every XP hook point
+across combat/mining/crafting, the Magic-boosted summon damage, the
+crafting material-refund roll, and a full app test driving real level-up
+notifications and the Skills screen's click-to-select/unlock flow).
 
 ## Controls
 
 A one-time character-select screen appears at startup: click a portrait (or
-Left/Right to change the highlight), Enter/Space to confirm. Everything
-below applies once you're in the world.
+Left/Right to change the highlight), Enter/Space to confirm. A class-select
+screen follows immediately after (same click/arrow-keys/Enter controls,
+text cards instead of portraits) -- see "How the Summoner class works"
+below. Everything below applies once you're in the world.
 
 | Action | Key |
 |---|---|
@@ -87,11 +100,15 @@ below applies once you're in the world.
 | Open/close inventory & equipment | E |
 | Equip an armor piece (while inventory is open) | Left-click it in the bag |
 | Unequip an armor piece (while inventory is open) | Left-click its equipment slot |
+| Show an item's tooltip (name, description, stats -- while inventory is open) | Hover it |
+| Equip an armor piece, or send any other item to the selected hotbar slot (while inventory is open) | Right-click it in the bag |
 | Open/close crafting | C |
 | Craft a recipe / start a smelt job (while crafting is open) | Left-click its row |
 | Scroll the crafting list (while crafting is open) | Mouse wheel |
+| Open/close Skills (levels + skill-point tree) | K |
+| Select a skill / unlock an eligible tree node (while Skills is open) | Left-click it |
 | Attack (melee or ranged -- select a weapon in the hotbar first) | Left-click |
-| Pause (opens a real menu: Resume/Settings/Restart/Quit) | Esc |
+| Pause (opens a real menu: Resume/Settings/Save/Load/Restart/Quit) | Esc |
 | Debug overlay (FPS, pos, chunk, seed, enemy count, day/time/ambient) | F3 |
 
 Combat: with any weapon selected, the character continuously faces the
@@ -498,6 +515,109 @@ equipped item's `defense` and is subtracted from incoming contact damage in
 so armor reduces damage but never fully negates it. The weapon slot in
 combat is still the hotbar selection, not a separate equip slot -- see
 "Controles" above.
+
+Hovering any occupied slot (bag or equipment) shows a floating tooltip
+next to the cursor (`Renderer._draw_item_tooltip`): name (colored by
+rarity), category/rarity, its wrapped `ItemDef.description`, and a
+category-specific stat block (`_item_tooltip_stat_lines` -- mining power
+for tools, damage/melee-or-ranged for weapons, defense/slot for armor,
+heal amount for food, durability and value where they apply). Clamped to
+stay fully on screen even near a window edge.
+
+Right-clicking a bag item is a quick-action shortcut
+(`InputHandler._handle_inventory_right_click`): armor equips immediately
+(same as the existing left-click equip path), anything else swaps places
+with whatever's in the *currently selected* hotbar slot
+(`Inventory.swap_slots`) -- a fast way to load the hotbar without
+dragging. Equipment slots aren't a right-click target (unequip already has
+its own left-click action).
+
+## How the Summoner class works
+
+`player.class_id` (`game/entities/class_registry.py`) picks between two
+classes, chosen once at the class-select screen (see "Controles" above):
+**Warrior**, the default, fights with any sword or bow exactly as before;
+**Summoner** fights entirely through a summoned minion and can't swing a
+sword or fire a bow at all. Every `ItemDef` weapon has a `weapon_class`
+(`"normal"` by default, `"summon"` for the two summon rods below) and
+every `ClassDef` lists which `weapon_class`es it allows --
+`combat_system.try_attack` checks the selected item's `weapon_class`
+against the player's class before doing anything else, and
+`Player.blocked_weapon_class_reason()` surfaces a toast ("Your Warrior
+class can't use this") the same way a missing pickaxe already does for
+mining.
+
+Casting a summon rod (left-click with it selected) summons its minion at
+the player's position, replacing whatever summon was already active --
+only one summon is ever out at a time. Two rods exist so far: the **Twig
+Rod** (craftable anywhere from 8 Wood -- also handed to a Summoner for
+free the moment the class is picked) casts a weak **Twig Sprite**; the
+**Iron Rod** (a Workbench recipe needing a smelted Iron Bar) casts a much
+stronger **Iron Guardian**. A summon (`game/entities/summon.py`,
+`summon_ai.py`) flies toward the nearest alive enemy within its
+`seek_radius_tiles` and attacks once in range (`combat_system.
+resolve_summon_attacks`, on the same "AI moves, combat_system deals the
+damage" split enemies already use), otherwise it hovers near the player
+and snaps back if it strays past `follow_distance_tiles`. Movement is
+flying-style (gravity ignored, no wall/ledge avoidance) -- the same
+deliberate simplification already used for the Duskwing enemy -- and, in
+this first pass, a summon **cannot be damaged**: no enemy in the game
+currently has any way to attack a friendly entity, so summons are safe by
+omission rather than by design. There's no HUD indicator for the active
+summon yet, and only these two tiers exist -- more classes/rods/summons
+would follow the exact same `ClassDef`/`SummonDef` registry pattern.
+
+## How skills/leveling work
+
+Six independent RuneScape-style skills (`game/skills/`) -- **Attack,
+Defense, Magic, Mining, Crafting, Hitpoints** -- each with its own XP bar
+and level 1-99, using the real RuneScape XP curve
+(`game/skills/xp_table.py`: `xp(99) = 13,034,431`, an intentionally steep
+curve where early levels are fast and 99 is a genuine long-term goal, the
+whole appeal of the genre). Open the Skills screen with `K`.
+
+XP is granted right inside whichever function already owns the relevant
+transaction, not from a central "XP manager": landing a melee or ranged
+hit grants Attack XP (plus a kill bonus), a summon landing a hit grants
+Magic XP, taking damage grants Defense XP, breaking a tile grants Mining
+XP, and a successful craft or completed smelt grants Crafting XP.
+Hitpoints never gets XP directly -- like real RuneScape, it passively
+earns 1/3 of every Attack/Defense/Magic grant and raises `player.
+max_health` on level-up (healing you by the same amount), since every
+combat skill also trains survivability.
+
+Every skill has a real effect, not just a number going up: Attack and
+Magic scale weapon/summon damage (a percentage per level, since this game
+has no hit-chance/accuracy system to attach a RuneScape-style Attack-vs-
+Strength split to); Defense adds a flat bonus on top of equipped armor
+via `combat_system.player_total_defense(player)`; Mining scales mining
+power; Crafting boosts its own XP gain and can refund a material. Leveling
+a skill also earns it points (1 per level) spendable on that skill's own
+3-tier skill-point tree (`game/skills/skill_tree_registry.py`, levels
+10/30/50) -- click a skill in the Skills screen to see its tree, then
+click an eligible (green-bordered) node to unlock it. Tiers 2 and 3 also
+require the previous tier specifically (`SkillNodeDef.requires_node_id`),
+drawn as a line connecting the node boxes (gold once unlocked through),
+so it's a real chain to climb rather than 3 independently-gated boxes.
+`Skills.available_points` is derived from `level - 1 - unlocked_count`,
+not stored separately, so it can never drift out of sync with what's
+actually unlocked.
+
+Two more places show skill progress without opening the full Skills
+screen: the character sheet (`E`) has a compact 2-column, 6-skill level
+grid below its HP/Defense/Attack/Combat Lv block, and an always-visible
+top-left HUD bar shows `Combat Lv N` plus a % bar
+(`Skills.combat_level_progress_ratio`, the average of Attack/Defense/
+Magic/Hitpoints' individual progress toward their next level -- Combat Lv
+itself has no XP track of its own, so this is the closest honest
+approximation of "how close to the next tick").
+
+A summon's Magic-boosted stats are baked in at cast time
+(`combat_system._try_summon_cast`) as per-instance overrides on the
+`Summon` object itself (`damage`/`move_speed`/`attack_interval_s`), the
+same way `Enemy.health` already diverges from its `EnemyDef.max_health`
+template -- leveling Magic mid-fight doesn't retroactively buff an
+already-summoned minion, only casting (or re-casting) a rod does.
 
 ## How to create a recipe
 

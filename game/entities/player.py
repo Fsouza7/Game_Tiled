@@ -3,9 +3,10 @@ import logging
 from typing import Optional, Tuple
 
 from game.entities.entity import Entity
-from game.entities import tile_collision
+from game.entities import tile_collision, grapple
 from game.inventory.inventory import Inventory
 from game.inventory.equipment import Equipment
+from game.skills.skills import Skills
 from game.items import item_registry
 from game.settings import (
     TILE_SIZE, PLAYER_WIDTH_TILES, PLAYER_HEIGHT_TILES, GRAVITY,
@@ -14,9 +15,10 @@ from game.settings import (
     FALL_DAMAGE_MIN_SPEED, FALL_DAMAGE_PER_UNIT, PLAYER_MAX_HEALTH,
     PLAYER_REACH_TILES, PLAYER_MINE_TICK_S, WORLD_WIDTH_TILES,
     PLAYER_HIT_INVULNERABILITY_S, PLAYER_REGEN_RATE_HP_PER_S,
-    PLAYER_REGEN_DELAY_AFTER_DAMAGE_S, FAN_RANGE_TILES,
+    PLAYER_REGEN_DELAY_AFTER_DAMAGE_S, FAN_RANGE_TILES, MINING_XP_PER_BREAK,
+    GRAPPLE_PULL_SPEED, GRAPPLE_ARRIVAL_DISTANCE_TILES, GRAPPLE_COOLDOWN_S,
 )
-from game.entities import character_registry
+from game.entities import character_registry, class_registry
 from game.world.world import World
 from game.world import tile_registry
 
@@ -24,12 +26,17 @@ logger = logging.getLogger(__name__)
 
 
 class Player(Entity):
-    def __init__(self, spawn_x_px: float, spawn_y_px: float, character_id: str = character_registry.DEFAULT_CHARACTER_ID):
+    def __init__(
+        self, spawn_x_px: float, spawn_y_px: float,
+        character_id: str = character_registry.DEFAULT_CHARACTER_ID,
+        class_id: str = class_registry.DEFAULT_CLASS_ID,
+    ):
         width = PLAYER_WIDTH_TILES * TILE_SIZE
         height = PLAYER_HEIGHT_TILES * TILE_SIZE
         super().__init__(spawn_x_px, spawn_y_px, width, height)
 
         self.character_id = character_id
+        self.class_id = class_id
         self.spawn_x = spawn_x_px
         self.spawn_y = spawn_y_px
         self.on_ground = False
@@ -42,12 +49,15 @@ class Player(Entity):
         self.inventory = Inventory()
         self.inventory.add_item("wood_pickaxe", 1)
         self.equipment = Equipment()
+        self.inventory.add_item("grapple_hook", 1)
+        self.equipment.equip_from_inventory(self.inventory, "grapple_hook")
+        self.skills = Skills()
 
         # Item ids the player has ever obtained (mined/looted/crafted), even
         # if none are currently in the bag -- drives which recipes are
         # "discovered" in the crafting screen (see crafting_system.is_recipe_discovered).
         # Permanent: never cleared by respawn/death.
-        self.discovered_item_ids = {"wood_pickaxe"}
+        self.discovered_item_ids = {"wood_pickaxe", "grapple_hook"}
 
         self._mining_target: Optional[Tuple[int, int]] = None
         self._mining_progress = 0.0
@@ -62,6 +72,13 @@ class Player(Entity):
         self.jump_count = 0
         self.double_jump_visual_timer = 0.0
 
+        # Grapple Hook accessory state (see try_use_accessory/_hook_pull_step).
+        # Not persisted across save/load, same as the other momentary
+        # combat/movement timers above -- a mid-swing hook has no
+        # meaningful "resume" on load.
+        self.hook_target: Optional[Tuple[float, float]] = None
+        self.hook_cooldown_remaining = 0.0
+
     # --- input-facing intent ---
     def move_left(self) -> None:
         self.x_vel = -PLAYER_MOVE_SPEED
@@ -75,6 +92,12 @@ class Player(Entity):
         self.x_vel = 0.0
 
     def jump(self) -> None:
+        if self.hook_target is not None:
+            # Jumping off a wall the hook is holding you against -- a full,
+            # fresh jump (see _try_fire_grapple_hook resetting jump_count
+            # to 0 the moment the hook catches), not a second/double jump.
+            self.hook_target = None
+            self.jump_count = 0
         if self.jump_count >= PLAYER_MAX_JUMPS:
             return
         self.y_vel = PLAYER_JUMP_VELOCITY if self.jump_count == 0 else PLAYER_DOUBLE_JUMP_VELOCITY
@@ -92,15 +115,22 @@ class Player(Entity):
         self.attack_cooldown_remaining = max(0.0, self.attack_cooldown_remaining - dt)
         self.melee_swing_timer = max(0.0, self.melee_swing_timer - dt)
         self.double_jump_visual_timer = max(0.0, self.double_jump_visual_timer - dt)
+        self.hook_cooldown_remaining = max(0.0, self.hook_cooldown_remaining - dt)
         self._regen_step(dt)
 
-        self.y_vel = min(self.y_vel + GRAVITY, MAX_FALL_SPEED)
+        if self.hook_target is not None:
+            # The hook overrides gravity/fan entirely while it's holding
+            # you against a wall -- same "override for as long as active"
+            # precedent as the Fan updraft below.
+            self._hook_pull_step()
+        else:
+            self.y_vel = min(self.y_vel + GRAVITY, MAX_FALL_SPEED)
 
-        updraft = self._fan_updraft(world)
-        if updraft > 0.0:
-            # A Fan's airstream overrides gravity for as long as the player
-            # stays inside its range -- a steady push, not an accelerating one.
-            self.y_vel = -updraft
+            updraft = self._fan_updraft(world)
+            if updraft > 0.0:
+                # A Fan's airstream overrides gravity for as long as the player
+                # stays inside its range -- a steady push, not an accelerating one.
+                self.y_vel = -updraft
 
         pre_land_y_vel = self.y_vel
         ground_speed_mult = self._ground_speed_multiplier(world) if self.on_ground else 1.0
@@ -165,11 +195,83 @@ class Player(Entity):
             strongest = max(strongest, strength)
         return strongest
 
+    def _hook_pull_step(self) -> None:
+        """Steers velocity toward hook_target every frame the hook is
+        active. Movement/collision is still resolved by the normal
+        tile_collision.move_axis calls in physics_step -- this only
+        supplies the direction/speed, so the player can't clip through
+        other walls on the way to the anchor. Reaching the anchor (or,
+        in practice, colliding with the wall it's on first) leaves the
+        player effectively pinned there -- "hanging" -- until jump() or
+        another E press releases the hook; it does not auto-release on
+        arrival, that's the point (a wall-cling to climb from)."""
+        target_x, target_y = self.hook_target
+        dx = target_x - self.center_x
+        dy = target_y - self.center_y
+        distance = (dx ** 2 + dy ** 2) ** 0.5
+        if distance <= GRAPPLE_ARRIVAL_DISTANCE_TILES * TILE_SIZE:
+            self.x_vel = 0.0
+            self.y_vel = 0.0
+            return
+        self.x_vel = GRAPPLE_PULL_SPEED * dx / distance
+        self.y_vel = GRAPPLE_PULL_SPEED * dy / distance
+
+    def try_use_accessory(self, world: World, aim_world_pos) -> bool:
+        """The E-key entry point: activates whatever's equipped in the
+        accessory slot. Only one accessory kind exists so far (the
+        Grapple Hook) -- structured as an explicit dispatch, not a
+        generic "effect engine", so a second accessory kind is just
+        another `elif` here, matching this codebase's established style.
+        Returns whether anything happened."""
+        item_id = self.equipment.get("accessory")
+        if item_id is None:
+            return False
+        item_def = item_registry.get(item_id)
+        if item_def.accessory_kind == "grapple_hook":
+            return self._try_fire_grapple_hook(world, aim_world_pos)
+        return False
+
+    def _try_fire_grapple_hook(self, world: World, aim_world_pos) -> bool:
+        if self.hook_target is not None:
+            self.hook_target = None  # pressing E again lets go
+            return True
+        if self.hook_cooldown_remaining > 0.0:
+            return False
+
+        self.hook_cooldown_remaining = GRAPPLE_COOLDOWN_S
+        dx = aim_world_pos[0] - self.center_x
+        dy = aim_world_pos[1] - self.center_y
+        distance = max(1.0, (dx ** 2 + dy ** 2) ** 0.5)
+        anchor = grapple.find_hook_anchor(world, self.center_x, self.center_y, dx / distance, dy / distance)
+        if anchor is None:
+            return False
+
+        self.hook_target = anchor
+        self.jump_count = 0  # a fresh grip on the wall -- full jumps available off it
+        return True
+
     def is_invulnerable(self) -> bool:
         return self.invulnerability_remaining > 0.0
 
     def can_attack(self) -> bool:
         return self.attack_cooldown_remaining <= 0.0
+
+    def blocked_weapon_class_reason(self) -> Optional[str]:
+        """Human-readable reason the currently selected weapon can't be
+        used by this class right now (e.g. a Warrior holding a summon
+        rod) -- for InputHandler to surface as an on-screen message,
+        mirroring blocked_mining_reason. None if nothing's selected, it
+        isn't a weapon, or the class allows it."""
+        selected = self.inventory.get_selected_item()
+        if selected is None:
+            return None
+        item_def = item_registry.get(selected.item_id)
+        if not item_def.is_weapon:
+            return None
+        class_def = class_registry.get(self.class_id)
+        if item_def.weapon_class in class_def.allowed_weapon_classes:
+            return None
+        return f"Your {class_def.name} class can't use this"
 
     def is_regenerating(self) -> bool:
         return self.regen_delay_remaining <= 0.0 and self.health < self.max_health
@@ -215,6 +317,8 @@ class Player(Entity):
         self.regen_delay_remaining = 0.0
         self.jump_count = 0
         self.double_jump_visual_timer = 0.0
+        self.hook_target = None
+        self.hook_cooldown_remaining = 0.0
 
     # --- item discovery ---
     def collect_item(self, item_id: str, quantity: int) -> int:
@@ -257,7 +361,7 @@ class Player(Entity):
                 or item_def.tool_type == tile_def.required_tool
             ):
                 base_power = max(base_power, item_def.mining_power)
-        return base_power
+        return base_power * self.skills.mining_power_multiplier()
 
     def is_in_reach(self, tile_x: int, tile_y: int) -> bool:
         dx = (tile_x + 0.5) * TILE_SIZE - self.center_x
@@ -306,8 +410,9 @@ class Player(Entity):
             self._mining_progress = 0.0
             self._mine_tick_accum = 0.0
 
+        effective_tick_s = PLAYER_MINE_TICK_S * (0.8 if self.skills.has_node("mining_deep_delver") else 1.0)
         self._mine_tick_accum += dt
-        if self._mine_tick_accum < PLAYER_MINE_TICK_S:
+        if self._mine_tick_accum < effective_tick_s:
             return None
         self._mine_tick_accum = 0.0
 
@@ -318,6 +423,8 @@ class Player(Entity):
         drop = world.try_break_tile(tile_x, tile_y)
         self._mining_target = None
         self._mining_progress = 0.0
+        if drop is not None:
+            self.skills.add_xp("mining", MINING_XP_PER_BREAK)
         return drop
 
     def cancel_mining(self) -> None:

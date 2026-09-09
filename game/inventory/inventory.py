@@ -77,3 +77,9 @@ class Inventory:
         if slot.is_empty:
             return 0
         return self.remove_item(slot.item_id, quantity)
+
+    def swap_slots(self, index_a: int, index_b: int) -> None:
+        """Swaps two slots' contents in place -- used by the inventory
+        screen's right-click "send to selected hotbar slot" action. A
+        no-op if index_a == index_b (e.g. the item is already there)."""
+        self.slots[index_a], self.slots[index_b] = self.slots[index_b], self.slots[index_a]

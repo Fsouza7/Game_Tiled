@@ -57,7 +57,7 @@ def test_weapon_schema_has_damage_and_speed():
     assert sword.max_durability is not None
 
 
-def test_only_the_starter_pickaxe_is_granted_by_default():
+def test_only_starter_loadout_is_granted_by_default():
     # Everything else (materials, weapons, armor, consumables) must be
     # gathered/crafted -- confirm none of it is silently handed to the
     # player as a shortcut, even once it's obtainable elsewhere.
@@ -65,6 +65,8 @@ def test_only_the_starter_pickaxe_is_granted_by_default():
     for item_id in ("wood", "wood_sword", "wood_helmet", "wood_armor", "apple"):
         assert player.inventory.count_item(item_id) == 0
     assert player.inventory.count_item("wood_pickaxe") == 1
+    assert player.inventory.count_item("grapple_hook") == 0  # equipped, not in bag
+    assert player.equipment.get("accessory") == "grapple_hook"
 
 
 def test_no_duplicate_item_ids():

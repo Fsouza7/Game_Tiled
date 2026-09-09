@@ -530,6 +530,18 @@ def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
         ], width=1)
         icons[item_id] = surf
 
+    # Summon rods: a shaft with a small glowing orb tip, color varies by
+    # tier -- no dedicated art exists for these (Summoner class).
+    for item_id, shaft_color, orb_color in (
+        ("summon_rod_wood", (120, 90, 50), (140, 210, 120)),
+        ("summon_rod_iron", (150, 150, 158), (180, 180, 190)),
+    ):
+        surf = new_surface()
+        pygame.draw.line(surf, shaft_color, (size * 0.25, size * 0.9), (size * 0.65, size * 0.3), width=4)
+        pygame.draw.circle(surf, orb_color, (int(size * 0.68), int(size * 0.22)), int(size * 0.16))
+        pygame.draw.circle(surf, (250, 250, 245), (int(size * 0.63), int(size * 0.17)), int(size * 0.05))
+        icons[item_id] = surf
+
     # Iron Pickaxe: same shape as the wood/stone pickaxes above, iron-toned.
     surf = new_surface()
     pygame.draw.line(surf, (100, 70, 40), (size * 0.25, size * 0.85), (size * 0.75, size * 0.2), width=4)
@@ -539,6 +551,16 @@ def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
         start_angle=3.6, stop_angle=6.0, width=6,
     )
     icons["iron_pickaxe"] = surf
+
+    # Grapple Hook: a taut rope line with a curved metal hook at the tip.
+    surf = new_surface()
+    pygame.draw.line(surf, (150, 110, 60), (size * 0.2, size * 0.9), (size * 0.65, size * 0.35), width=3)
+    pygame.draw.arc(
+        surf, (190, 190, 198),
+        pygame.Rect(size * 0.5, size * 0.08, size * 0.4, size * 0.4),
+        start_angle=0.6, stop_angle=4.4, width=5,
+    )
+    icons["grapple_hook"] = surf
 
     return icons
 

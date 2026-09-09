@@ -156,3 +156,122 @@ def test_equipment_slot_at_screen_pos_matches_rect():
         rect = equipment_slot_rect(slot_name)
         assert equipment_slot_at_screen_pos(rect.center) == slot_name
     assert equipment_slot_at_screen_pos((0, 0)) is None
+
+
+# --- inventory right-click quick actions ---
+
+def _bag_slot_center(index: int):
+    from game.rendering.renderer import inventory_bag_slot_rect
+    return inventory_bag_slot_rect(index).center
+
+
+class _FakeGameApp:
+    """Just enough surface for InputHandler._handle_inventory_right_click,
+    which only ever touches game_app.player."""
+    def __init__(self, player):
+        self.player = player
+
+
+def test_right_click_armor_equips_it_instead_of_moving_to_hotbar():
+    from game.input.input_handler import InputHandler
+
+    player = Player(0, 0)
+    player.inventory.slots[0].item_id = "wood_helmet"
+    player.inventory.slots[0].quantity = 1
+    player.inventory.select_hotbar(4)
+
+    InputHandler()._handle_inventory_right_click(_bag_slot_center(0), _FakeGameApp(player))
+
+    assert player.equipment.get("head") == "wood_helmet"
+    assert player.inventory.slots[0].is_empty
+    assert player.inventory.slots[4].is_empty  # hotbar target untouched by the equip path
+
+
+def test_right_click_non_armor_sends_it_to_the_selected_hotbar_slot():
+    from game.input.input_handler import InputHandler
+
+    player = Player(0, 0)
+    player.inventory.slots[3].item_id = "wood"
+    player.inventory.slots[3].quantity = 6
+    player.inventory.select_hotbar(1)
+
+    InputHandler()._handle_inventory_right_click(_bag_slot_center(3), _FakeGameApp(player))
+
+    assert player.inventory.slots[1].item_id == "wood"
+    assert player.inventory.slots[1].quantity == 6
+    assert player.inventory.slots[3].is_empty  # swapped out (slot 1 started empty)
+
+
+def test_right_click_on_an_empty_slot_does_nothing():
+    from game.input.input_handler import InputHandler
+
+    player = Player(0, 0)  # slot 0 starts with the default wood_pickaxe -- use an empty one
+    player.inventory.select_hotbar(2)
+    before = [(s.item_id, s.quantity) for s in player.inventory.slots]
+
+    InputHandler()._handle_inventory_right_click(_bag_slot_center(5), _FakeGameApp(player))
+
+    after = [(s.item_id, s.quantity) for s in player.inventory.slots]
+    assert before == after
+
+
+# --- item tooltip ---
+
+def test_hovered_inventory_item_reads_bag_slot():
+    from game.rendering.renderer import Renderer
+
+    player = Player(0, 0)
+    player.inventory.slots[2].item_id = "wood"
+    player.inventory.slots[2].quantity = 9
+
+    item_id, quantity = Renderer.__new__(Renderer)._hovered_inventory_item(player, _bag_slot_center(2))
+    assert item_id == "wood"
+    assert quantity == 9
+
+
+def test_hovered_inventory_item_reads_equipment_slot_with_no_quantity():
+    from game.rendering.renderer import Renderer, equipment_slot_rect
+
+    player = Player(0, 0)
+    player.equipment.slots["head"] = "wood_helmet"
+
+    item_id, quantity = Renderer.__new__(Renderer)._hovered_inventory_item(player, equipment_slot_rect("head").center)
+    assert item_id == "wood_helmet"
+    assert quantity is None
+
+
+def test_hovered_inventory_item_is_none_when_nothing_is_hovered():
+    from game.rendering.renderer import Renderer
+
+    player = Player(0, 0)
+    item_id, quantity = Renderer.__new__(Renderer)._hovered_inventory_item(player, (0, 0))
+    assert item_id is None and quantity is None
+
+
+def test_item_tooltip_stat_lines_vary_by_category():
+    from game.rendering.renderer import Renderer
+
+    renderer = Renderer.__new__(Renderer)
+    pickaxe_lines = dict(renderer._item_tooltip_stat_lines(item_registry.get("wood_pickaxe")))
+    assert any(k.startswith("Mining Power") for k in pickaxe_lines)
+
+    helmet_lines = dict(renderer._item_tooltip_stat_lines(item_registry.get("wood_helmet")))
+    assert any(k.startswith("Defense") for k in helmet_lines)
+    assert any(k.startswith("Slot") for k in helmet_lines)
+
+    apple_lines = dict(renderer._item_tooltip_stat_lines(item_registry.get("apple")))
+    assert any(k.startswith("Heals") for k in apple_lines)
+
+
+def test_draw_item_tooltip_does_not_crash_and_stays_on_screen():
+    import pygame as pg
+    from game.rendering.renderer import Renderer
+    from game.settings import WINDOW_WIDTH, WINDOW_HEIGHT
+
+    pg.init()
+    pg.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    renderer = Renderer()
+    window = pg.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    # Near the bottom-right corner, where a naive tooltip would overflow
+    # the window if it weren't clamped.
+    renderer._draw_item_tooltip(window, "wood_sword", 1, (WINDOW_WIDTH - 5, WINDOW_HEIGHT - 5))

@@ -299,30 +299,33 @@ def test_ranged_attack_requires_and_consumes_ammo():
 def test_projectile_hits_enemy_and_is_removed():
     world = World(DEFAULT_SEED)
     x = WORLD_WIDTH_TILES // 2
+    player = _make_player_at(world, x)
     surface_y = world.surface_spawn_y(x) + 1
     enemy = Enemy(enemy_registry.get("slime"), x * TILE_SIZE, (surface_y - 1) * TILE_SIZE)
     projectile = Projectile(enemy.center_x, enemy.center_y, 0.0, 0.0, damage=999.0)
 
-    survivors = combat_system.update_projectiles([projectile], world, [enemy], dt=1 / 60)
+    survivors = combat_system.update_projectiles(player, [projectile], world, [enemy], dt=1 / 60)
     assert survivors == []
     assert enemy.defeated is True
 
 
 def test_projectile_expires_after_lifetime():
     world = World(DEFAULT_SEED)
+    player = _make_player_at(world, WORLD_WIDTH_TILES // 2)
     projectile = Projectile(TILE_SIZE * 10, TILE_SIZE * 10, 0.0, 0.0, damage=1.0)
     projectile.time_remaining = 0.001
-    survivors = combat_system.update_projectiles([projectile], world, [], dt=1 / 60)
+    survivors = combat_system.update_projectiles(player, [projectile], world, [], dt=1 / 60)
     assert survivors == []
 
 
 def test_projectile_destroyed_by_solid_tile():
     world = World(DEFAULT_SEED)
     x = WORLD_WIDTH_TILES // 2
+    player = _make_player_at(world, x)
     surface_y = world.surface_spawn_y(x) + 1
     assert world.get_tile(x, surface_y) == GRASS_ID
     projectile = Projectile(x * TILE_SIZE, surface_y * TILE_SIZE, 0.0, 0.0, damage=1.0)
-    survivors = combat_system.update_projectiles([projectile], world, [], dt=1 / 60)
+    survivors = combat_system.update_projectiles(player, [projectile], world, [], dt=1 / 60)
     assert survivors == []
 
 
@@ -336,12 +339,13 @@ def test_contact_damage_applies_once_then_respects_invulnerability():
     enemy = Enemy(enemy_registry.get("crawler"), x * TILE_SIZE, (surface_y - 1) * TILE_SIZE)
 
     starting_hp = player.health
+    expected_damage = enemy.enemy_def.contact_damage - combat_system.player_total_defense(player)
     combat_system.resolve_contact_damage(player, [enemy])
-    assert player.health == starting_hp - enemy.enemy_def.contact_damage
+    assert player.health == starting_hp - expected_damage
     assert player.is_invulnerable() is True
 
     combat_system.resolve_contact_damage(player, [enemy])  # still overlapping
-    assert player.health == starting_hp - enemy.enemy_def.contact_damage  # unchanged
+    assert player.health == starting_hp - expected_damage  # unchanged
 
 
 def test_enemy_invulnerability_blocks_repeat_damage():
