@@ -139,15 +139,17 @@ _register(ItemDef(
     places_tile_id=tile_registry.JUNGLE_STONE_ID,
 ))
 
-# --- Ores (raw resources, obtained by mining; icon borrows the ore tile's
-# own texture instead of a generic swatch) ---
+# --- Ores (raw resources, obtained by mining; icon is a loose-ore-chunk
+# icon from the user-supplied icon sheet -- see assets._SHEET_ICON_CELLS --
+# rather than a reused tile texture, which read more like carrying a block
+# than a handful of ore) ---
 
 _register(ItemDef(
     id="coal", name="Coal",
     description="A dark, combustible mineral found in shallow deposits.",
     category=ItemCategory.ORE, max_stack=DEFAULT_STACK_SIZE,
     rarity=ItemRarity.COMMON, value=3,
-    icon_tile_id=tile_registry.COAL_ORE_ID,
+    icon_key="coal",
 ))
 
 _register(ItemDef(
@@ -155,7 +157,7 @@ _register(ItemDef(
     description="Raw iron. Smelt it at a Furnace (with Coal as fuel) into an Iron Bar.",
     category=ItemCategory.ORE, max_stack=DEFAULT_STACK_SIZE,
     rarity=ItemRarity.UNCOMMON, value=6,
-    icon_tile_id=tile_registry.IRON_ORE_ID,
+    icon_key="iron_ore",
 ))
 
 # --- Biome-exclusive gems (rare deep-underground finds, one per non-forest
@@ -167,7 +169,7 @@ _register(ItemDef(
     description="A golden gem found deep beneath the desert. Smeltable into a Topaz Bar, which feeds an Arcane Bar.",
     category=ItemCategory.ORE, max_stack=DEFAULT_STACK_SIZE,
     rarity=ItemRarity.RARE, value=15,
-    icon_tile_id=tile_registry.TOPAZ_ORE_ID,
+    icon_key="topaz",
 ))
 
 _register(ItemDef(
@@ -175,7 +177,7 @@ _register(ItemDef(
     description="A blue gem found deep beneath the snow. Smeltable into a Sapphire Bar, which feeds an Arcane Bar.",
     category=ItemCategory.ORE, max_stack=DEFAULT_STACK_SIZE,
     rarity=ItemRarity.RARE, value=15,
-    icon_tile_id=tile_registry.SAPPHIRE_ORE_ID,
+    icon_key="sapphire",
 ))
 
 _register(ItemDef(
@@ -183,7 +185,7 @@ _register(ItemDef(
     description="A green gem found deep beneath the jungle. Smeltable into an Emerald Bar, which feeds an Arcane Bar.",
     category=ItemCategory.ORE, max_stack=DEFAULT_STACK_SIZE,
     rarity=ItemRarity.RARE, value=15,
-    icon_tile_id=tile_registry.EMERALD_ORE_ID,
+    icon_key="emerald",
 ))
 
 # --- Bars (smelted at a Furnace from the ores above -- see
@@ -631,6 +633,24 @@ _register(ItemDef(
     places_tile_id=tile_registry.CHECKPOINT_ID,
 ))
 
+# --- Building: Doors & Beds (user-requested construction system) ---
+
+_register(ItemDef(
+    id="door", name="Wood Door",
+    description="Press T to open or close. Build walls from Wood Plank/Stone Blocks around one so you're not sealed in your own house.",
+    category=ItemCategory.BLOCK, max_stack=DEFAULT_STACK_SIZE,
+    rarity=ItemRarity.COMMON, value=6,
+    places_tile_id=tile_registry.DOOR_CLOSED_ID,
+))
+
+_register(ItemDef(
+    id="bed", name="Bed",
+    description="Press T to sleep and skip to morning. Only works at night, inside a real enclosed room (walls, floor and a roof).",
+    category=ItemCategory.BLOCK, max_stack=DEFAULT_STACK_SIZE,
+    rarity=ItemRarity.UNCOMMON, value=14,
+    places_tile_id=tile_registry.BED_ID,
+))
+
 
 # --- Boss: Slime King (Phase 10) ---
 
@@ -640,6 +660,7 @@ _register(ItemDef(
     category=ItemCategory.CONSUMABLE, max_stack=10,
     rarity=ItemRarity.RARE, value=0,
     summons_boss_id="slime_king",
+    icon_key="slime_core_idol",
 ))
 
 _register(ItemDef(
@@ -647,6 +668,7 @@ _register(ItemDef(
     description="The crystallized heart of the Slime King. Drops only from defeating it.",
     category=ItemCategory.MATERIAL, max_stack=DEFAULT_STACK_SIZE,
     rarity=ItemRarity.EPIC, value=120,
+    icon_key="slime_king_core",
 ))
 
 _register(ItemDef(
@@ -655,6 +677,7 @@ _register(ItemDef(
     category=ItemCategory.ARMOR, max_stack=1,
     rarity=ItemRarity.EPIC, value=140, max_durability=400,
     equip_slot="head", defense=16.0,
+    icon_key="slime_king_crown",
 ))
 
 

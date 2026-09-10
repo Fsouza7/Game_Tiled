@@ -3,12 +3,15 @@ spawning read it, it just tracks time and derives an ambient light curve.
 """
 import math
 
-from game.settings import DAY_LENGTH_S, DAY_MAX_AMBIENT, NIGHT_MIN_AMBIENT, NIGHT_LIGHT_THRESHOLD
+from game.settings import (
+    DAY_LENGTH_S, DAY_MAX_AMBIENT, NIGHT_MIN_AMBIENT, NIGHT_LIGHT_THRESHOLD,
+    MORNING_TIME_OF_DAY_FRACTION,
+)
 
 
 class WorldClock:
     def __init__(self):
-        self.time_of_day = DAY_LENGTH_S * 0.3  # start mid-morning, not at midnight
+        self.time_of_day = DAY_LENGTH_S * MORNING_TIME_OF_DAY_FRACTION  # start mid-morning, not at midnight
         self.day_count = 1
 
     def update(self, dt: float) -> None:
@@ -16,6 +19,18 @@ class WorldClock:
         if self.time_of_day >= DAY_LENGTH_S:
             self.time_of_day -= DAY_LENGTH_S
             self.day_count += 1
+
+    def skip_to_morning(self) -> None:
+        """Sleeping in a Bed: jumps straight to the next morning, always
+        forward in time -- if it's already past dawn today (afternoon,
+        evening, night), that means tomorrow's dawn and the day count
+        ticks up; if it's earlier than dawn (the small early-morning
+        window before MORNING_TIME_OF_DAY_FRACTION), that means later
+        today, same day count."""
+        dawn = DAY_LENGTH_S * MORNING_TIME_OF_DAY_FRACTION
+        if self.time_of_day >= dawn:
+            self.day_count += 1
+        self.time_of_day = dawn
 
     @property
     def progress(self) -> float:

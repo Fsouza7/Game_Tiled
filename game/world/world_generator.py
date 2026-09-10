@@ -35,7 +35,7 @@ from game.settings import (
 )
 from game.world.tile_registry import (
     AIR_ID, COAL_ORE_ID, IRON_ORE_ID, BEDROCK_ID,
-    DECOR_CRATE_ID, TREE_TRUNK_ID, TREE_LEAVES_ID, CACTUS_ID, BUSH_ID,
+    DECOR_CRATE_ID, TREE_ID, CACTUS_ID, BUSH_ID,
     SPIKES_ID, FIRE_ID, ARROW_TRAP_ID, CRUMBLE_PLATFORM_ID, FAN_ID,
     TRAP_SAND_ID, TRAP_MUD_ID, TRAP_ICE_ID,
 )
@@ -62,13 +62,16 @@ BUSH_SPAWN_CHANCE = 0.05  # per column with no tree, Forest/Snow/Jungle only
 # The world is divided into fixed-width slots; each slot independently
 # rolls whether it contains one tree, and at which column within the slot.
 # This keeps tree placement a pure function of (seed, x) -- any column can
-# work out its own role (trunk / left canopy / right canopy / none) just by
-# re-deriving its slot's roll, with no dependency on neighboring columns
-# having been generated yet -- while still guaranteeing trees never overlap
-# (the slot width comfortably exceeds one tree's 3-tile footprint).
+# work out whether it's a tree's own column, or just within a nearby tree's
+# footprint, purely by re-deriving its slot's roll, with no dependency on
+# neighboring columns having been generated yet -- while still guaranteeing
+# trees never overlap (the slot width comfortably exceeds one tree sprite's
+# 2-tile width). A tree is a single TREE_ID tile (see tile_registry.py and
+# Renderer._draw_world's TREE_ID special case, which draws a real sprite
+# from assets/Tiles/Trees.png spanning well beyond this one tile) -- there's
+# no separate trunk/canopy role to track at the tile-grid level any more.
 TREE_SLOT_WIDTH = 8
 TREE_SPAWN_CHANCE_PER_SLOT = 0.35
-TREE_TRUNK_HEIGHT = 3
 
 
 def _column_rng(seed: int, x: int) -> random.Random:
@@ -83,21 +86,18 @@ def _tree_center_for_slot(seed: int, slot_index: int):
     return None
 
 
-def _tree_role_at(seed: int, x: int):
-    """Returns (center_x, role) if x belongs to a tree, else (None, None).
-    role is one of 'trunk', 'canopy_left', 'canopy_right'."""
+def _nearest_tree_center(seed: int, x: int):
+    """Returns the tree's own column if `x` is within a 1-tile margin of a
+    nearby tree (its own column, or a neighbor whose sprite may visually
+    overlap it), else None. The 1-tile margin keeps other decoration
+    (crates/bushes) from spawning directly under a tree's canopy overlap,
+    same as the old canopy_left/canopy_right reservation."""
     home_slot = x // TREE_SLOT_WIDTH
     for slot_index in (home_slot - 1, home_slot, home_slot + 1):
         center = _tree_center_for_slot(seed, slot_index)
-        if center is None:
-            continue
-        if x == center:
-            return center, "trunk"
-        if x == center - 1:
-            return center, "canopy_left"
-        if x == center + 1:
-            return center, "canopy_right"
-    return None, None
+        if center is not None and abs(x - center) <= 1:
+            return center
+    return None
 
 
 def _biome_zone_index(x: int) -> int:
@@ -257,16 +257,13 @@ def _place_fan_shaft(column: list, seed: int, x: int, surface_y: int, bedrock_st
 
 
 def _place_forest_decoration(column: list, seed: int, x: int, surface_y: int) -> None:
-    tree_center, tree_role = _tree_role_at(seed, x)
-    if tree_role is not None:
-        tree_surface_y = surface_height(seed, tree_center)  # aligns canopy across columns
-        if tree_role == "trunk":
-            for i in range(1, TREE_TRUNK_HEIGHT + 1):
-                column[tree_surface_y - i] = TREE_TRUNK_ID
-            column[tree_surface_y - TREE_TRUNK_HEIGHT - 1] = TREE_LEAVES_ID
-            column[tree_surface_y - TREE_TRUNK_HEIGHT - 2] = TREE_LEAVES_ID
-        else:  # canopy_left / canopy_right
-            column[tree_surface_y - TREE_TRUNK_HEIGHT - 1] = TREE_LEAVES_ID
+    tree_center = _nearest_tree_center(seed, x)
+    if tree_center is not None:
+        if x == tree_center:
+            column[surface_y - 1] = TREE_ID
+        # else: within a neighboring tree's visual footprint but not its
+        # own column -- nothing to place here, the tree's own tile draws a
+        # sprite wide enough to overlap this column purely visually.
     else:
         # Crates and berry bushes never compete with trees (or each other)
         # for the same tile -- one roll picks at most one of the two.

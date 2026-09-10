@@ -29,6 +29,13 @@ class TileDef:
     # item (e.g. a berry bush yielding a random fruit) -- takes priority
     # over drop_item_id when set. See World.try_break_tile.
     drop_pool: Optional[Tuple[str, ...]] = None
+    # How many of drop_item_id/drop_pool's pick a single break grants (on
+    # top of Player.mining_drop_quantity's usual +1 fortune bonus) -- 1 for
+    # every ordinary tile; the Tree tile sets this higher since it now
+    # represents a whole tree felled in one break, not one of several
+    # stacked trunk/leaf tiles each dropping separately (see World.
+    # try_break_tile and Tree's docstring in tile_registry.py).
+    break_quantity: int = 1
     # Interactive-tile hooks, both opt-in (0 = inert), handled in
     # Player.physics_step: contact_damage hurts the player on overlap
     # (a placeable hazard, e.g. Spikes); bounce_velocity launches the

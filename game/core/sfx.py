@@ -39,6 +39,7 @@ SAMPLE_RATE = 44100
 _MAX_AMPLITUDE = 32767
 
 _sound_bytes: Dict[str, bytes] = {}  # process-lifetime cache, mixer-session-independent (see module docstring)
+_volume = 1.0  # master SFX gain applied at play() time -- see set_volume
 
 
 def _envelope(n: int, attack: int, release: int) -> List[float]:
@@ -157,6 +158,14 @@ def _build_sound_bank() -> Dict[str, array.array]:
             _tone(784, 0.08, volume=0.22, wave="triangle"), _tone(1047, 0.16, volume=0.26, wave="triangle"),
         ),
         "chest_open": _concat(_tone(392, 0.06, volume=0.18, wave="sine"), _tone(523, 0.1, volume=0.2, wave="sine")),
+        "ui_tick": _tone(880, 0.035, volume=0.16, wave="sine"),
+        # A soft descending chime for sleeping through the night -- the
+        # mirror image of level_up's ascending one, since time is moving
+        # forward past a whole stretch of it rather than a stat going up.
+        "sleep": _concat(
+            _tone(784, 0.09, volume=0.18, wave="sine"), _tone(659, 0.09, volume=0.18, wave="sine"),
+            _tone(523, 0.16, volume=0.2, wave="sine"),
+        ),
     }
 
 
@@ -179,6 +188,15 @@ def init() -> None:
         logger.warning("Failed to synthesize sound effects", exc_info=True)
 
 
+def set_volume(volume: float) -> None:
+    """Sets the master gain every future play() call is scaled by (the
+    Settings screen's SFX Volume slider) -- applied per-Sound at play
+    time, not baked into the cached waveform bytes, so it takes effect
+    immediately without re-synthesizing anything."""
+    global _volume
+    _volume = max(0.0, min(1.0, volume))
+
+
 def play(key: str) -> None:
     """Builds a fresh Sound from the cached bytes and plays it immediately
     -- see the module docstring for why a Sound is never itself cached.
@@ -198,6 +216,8 @@ def play(key: str) -> None:
     if data is None or not pygame.mixer.get_init():
         return
     try:
-        pygame.mixer.Sound(buffer=data).play()
+        sound = pygame.mixer.Sound(buffer=data)
+        sound.set_volume(_volume)
+        sound.play()
     except Exception:
         logger.debug("Could not play sfx %r", key, exc_info=True)

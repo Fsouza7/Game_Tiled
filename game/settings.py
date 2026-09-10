@@ -8,7 +8,16 @@ FPS = 60
 WINDOW_TITLE = "Sandbox Prototype"
 
 # --- Audio ---
+# These two are only the *defaults* a fresh install starts at -- the live,
+# user-adjustable values are held on GameApp.prefs (game/core/settings_store.py)
+# and persisted to SETTINGS_FILE_PATH, independent of any save slot (see
+# that module's docstring for why: preferences should survive even with
+# no save yet, and a Restart/Load shouldn't touch how loud the player set
+# things).
 MUSIC_VOLUME = 0.4
+SFX_VOLUME = 0.7
+VOLUME_STEP = 0.1
+SETTINGS_FILE_PATH = os.path.join("saves", "settings.json")
 
 # --- World / Tiles ---
 TILE_SIZE = 32
@@ -100,7 +109,18 @@ CAMERA_HIT_SHAKE_MAX_PX = 7.0
 
 # --- Rendering ---
 PLAYER_ANIMATION_FRAME_DELAY = 4  # render-frames per animation frame
-BACKGROUND_PARALLAX = 0.4  # 0 = fixed, 1 = scrolls at full world speed
+# Per-layer horizontal scroll speed for the layered parallax background
+# (see assets.BACKGROUND_LAYER_PATHS / Renderer._draw_background), back to
+# front: sky barely moves (it's just a backdrop gradient), each silhouette
+# layer scrolls a bit faster than the one behind it for a depth cue, capped
+# well below 1.0 (full world speed) since these are meant to read as
+# distant scenery, not part of the playable foreground.
+BACKGROUND_LAYER_PARALLAX = {
+    "sky": 0.0,
+    "clouds": 0.1,
+    "rock_mountains": 0.25,
+    "grass_mountains": 0.45,
+}
 # How long the "double_jump" animation shows before falling back to the
 # regular jump/fall pose -- purely cosmetic, doesn't affect physics.
 PLAYER_DOUBLE_JUMP_VISUAL_DURATION_S = 0.35
@@ -131,8 +151,21 @@ PROJECTILE_LIFETIME_S = 3.0
 PROJECTILE_SIZE_TILES = 0.3
 
 # --- Enemies ---
-ENEMY_MAX_ALIVE = 8
-ENEMY_SPAWN_INTERVAL_S = 4.0
+# Population cap and spawn cadence both now depend on where/when the
+# player is (see EnemySpawner._current_limits): fewer, slower spawns in
+# daylight at the surface; more, faster ones at night; underground is the
+# most dangerous of all, at any hour, since caves are already dark
+# regardless of the surface day/night cycle (see "How lighting works").
+ENEMY_MAX_ALIVE_DAY = 5
+ENEMY_MAX_ALIVE_NIGHT = 10
+ENEMY_MAX_ALIVE_UNDERGROUND = 14
+ENEMY_SPAWN_INTERVAL_DAY_S = 5.0
+ENEMY_SPAWN_INTERVAL_NIGHT_S = 3.0
+ENEMY_SPAWN_INTERVAL_UNDERGROUND_S = 2.0
+# How far below the surface (in tiles) the player has to be before spawns
+# switch to the underground rules -- a few tiles of slack so walking
+# through a shallow dip in the terrain doesn't toggle it.
+UNDERGROUND_SPAWN_DEPTH_TILES = 4
 ENEMY_SPAWN_MIN_DISTANCE_TILES = 18
 ENEMY_SPAWN_MAX_DISTANCE_TILES = 32
 ENEMY_CHASE_RADIUS_TILES = 10
@@ -212,6 +245,10 @@ DAY_LENGTH_S = 600.0  # one full day+night cycle, real seconds
 DAY_MAX_AMBIENT = 1.0  # ambient light at noon
 NIGHT_MIN_AMBIENT = 0.12  # ambient light at midnight -- dim, not pitch black
 NIGHT_LIGHT_THRESHOLD = 0.5  # ambient below this counts as "night" for spawning
+# Sleeping in a Bed (see game/world/beds.py) skips straight to this point
+# in the cycle -- same "mid-morning" fraction __init__ already starts a
+# fresh run at, so waking up always lands at the same time of day.
+MORNING_TIME_OF_DAY_FRACTION = 0.3
 
 # --- Lighting ---
 # Torch light is computed only for the visible viewport (+ this margin) each
@@ -284,6 +321,23 @@ SURFACE_TRAP_SPAWN_CHANCE_PER_COLUMN = 0.02
 # Activation is exact-tile-overlap (like Spikes/Trampoline), no separate
 # radius check needed.
 
+# --- Building: Doors & Beds (user-requested construction system) ---
+# A Door toggles between a solid (closed) and passable (open) tile on T,
+# same "swap the actual stored tile id" trick Falling Platform already
+# uses for its crumble/respawn state (see World.set_tile). A Bed lets the
+# player skip to morning (WorldClock.skip_to_morning) at night, but only
+# if it's inside a real, bounded, walled-and-roofed space -- see
+# game/world/shelter.py's flood fill. Both are found via the same
+# STATION_SEARCH_RADIUS_TILES proximity check T already uses for NPCs/chests.
+# The flood fill from the bed's own tile stops counting a space as
+# "enclosed" once it has visited more open tiles than this -- either it
+# leaked out into the open world, or it's just too big to read as a cozy,
+# safe room. ~14x14 tiles of open interior at the default value.
+SHELTER_MAX_AIR_TILES = 200
+# A brief black-screen fade-out right after a successful sleep -- an
+# instant clock jump otherwise reads as a glitch, not a night passing.
+SLEEP_FADE_DURATION_S = 0.6
+
 # --- Particles ---
 PARTICLE_DUST_LIFETIME_S = 0.4
 PARTICLE_DUST_STEP_INTERVAL_S = 0.28  # min gap between footstep puffs while running on ground
@@ -348,21 +402,46 @@ ENEMY_PROJECTILE_GRAVITY_SCALE = 0.35  # fraction of world GRAVITY, same idea as
 # timer -- entering a lower phase is permanent since health only ever goes
 # down, exactly the "no going back" progression a real boss fight needs.
 # See game/entities/boss_ai.py.
+#
+# Retuned (user feedback: "ele nem tá me acertando no pulo, crie
+# projéteis, deixe ele mais forte"): the hop used to aim at wherever the
+# player happened to be standing *when the hop launched*, then commit to
+# that fixed horizontal velocity for the whole arc -- an easy dodge, since
+# SLIME_KING_MOVE_SPEED (4.5) was even slower than the player's own move
+# speed (5.5). It now leads the player's current velocity to predict
+# where they'll actually be when it lands (see boss_ai._update_hop_movement),
+# is faster than the player outright, and hops more often. The ranged
+# attack fans out into SLIME_KING_SPREAD_COUNT projectiles once enraged,
+# instead of one lob at a time. Damage/health are up across the board.
 BOSS_PHASE_2_HEALTH_RATIO = 0.66  # <= this ratio: adds the ranged Slime Lob attack
 BOSS_PHASE_3_HEALTH_RATIO = 0.33  # <= this ratio: enrages -- summons minions once, hops/attacks faster, gains a landing shockwave
-SLIME_KING_MAX_HEALTH = 480.0
-SLIME_KING_CONTACT_DAMAGE = 24.0
-SLIME_KING_MOVE_SPEED = 4.5
+SLIME_KING_MAX_HEALTH = 620.0
+SLIME_KING_CONTACT_DAMAGE = 30.0
+SLIME_KING_MOVE_SPEED = 6.5  # faster than PLAYER_MOVE_SPEED (5.5) -- it used to be slower, an easy walk-away
 SLIME_KING_WIDTH_TILES = 2.4
 SLIME_KING_HEIGHT_TILES = 1.8
-SLIME_KING_HOP_IMPULSE = 12.0
-SLIME_KING_HOP_INTERVAL_MIN_S = 0.5
-SLIME_KING_HOP_INTERVAL_MAX_S = 1.1
-SLIME_KING_PHASE_SPEED_MULT = (1.0, 1.25, 1.6)  # hop speed/frequency scale, indexed by phase_index (0/1/2)
-SLIME_KING_LOB_DAMAGE = 14.0
-SLIME_KING_LOB_SPEED = 9.0
-SLIME_KING_LOB_COOLDOWN_S = 2.2  # divided by SLIME_KING_PHASE_SPEED_MULT[phase_index]
+SLIME_KING_HOP_IMPULSE = 13.0
+SLIME_KING_HOP_INTERVAL_MIN_S = 0.35
+SLIME_KING_HOP_INTERVAL_MAX_S = 0.8
+SLIME_KING_PHASE_SPEED_MULT = (1.0, 1.3, 1.75)  # hop speed/frequency scale, indexed by phase_index (0/1/2)
+# The hop's horizontal speed is solved to land on the player's *predicted*
+# position (their current position + velocity * time-of-flight), capped
+# at move_speed * phase_mult * this -- otherwise a target far away would
+# demand an absurdly fast lunge to land exactly on them in one arc.
+SLIME_KING_HOP_LEAD_SPEED_MULT = 1.4
+SLIME_KING_LOB_DAMAGE = 18.0
+SLIME_KING_LOB_SPEED = 10.0
+SLIME_KING_LOB_COOLDOWN_S = 1.8  # divided by SLIME_KING_PHASE_SPEED_MULT[phase_index]
+SLIME_KING_SPREAD_COUNT = 3  # projectiles fired at once, phase 3 (enraged) only -- 1 in phase 2
+SLIME_KING_SPREAD_ANGLE_DEGREES = 16.0  # angular gap between each shot in the phase-3 fan
 SLIME_KING_MINION_COUNT = 2  # regular Slimes summoned once, on entering phase 3
-SLIME_KING_STOMP_DAMAGE = 16.0
+SLIME_KING_STOMP_DAMAGE = 22.0
 SLIME_KING_STOMP_RADIUS_TILES = 3.0  # phase-3 landing shockwave -- hits even without a direct hitbox overlap
-BOSS_COIN_BOUNTY = 60  # bonus coins granted on top of the guaranteed exclusive drop
+BOSS_COIN_BOUNTY = 90  # bonus coins granted on top of the guaranteed exclusive drop
+
+# --- Debug tools (F4 toggles debug_mode; F5-F11 while it's on -- see
+# GameApp's debug_* methods, InputHandler._handle_keydown, and README
+# "How the debug tools work"). Developer-only, gated behind the toggle so
+# a stray keypress during normal play can never trigger one. ---
+DEBUG_RESTOCK_COINS = 999
+DEBUG_SPAWN_SPACING_TILES = 2  # horizontal gap between each debug-spawned entity, so they don't stack

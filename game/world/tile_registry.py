@@ -53,6 +53,10 @@ FIRE_ID = 36
 ARROW_TRAP_ID = 37
 CHEST_ID = 38
 PERSONAL_CHEST_ID = 39
+DOOR_CLOSED_ID = 40
+DOOR_OPEN_ID = 41
+BED_ID = 42
+TREE_ID = 43
 
 _TILES: Dict[int, TileDef] = {}
 
@@ -119,15 +123,35 @@ _register(TileDef(
 ))
 
 _register(TileDef(
+    # Legacy -- world generation no longer places either of these (see
+    # TREE_ID below), kept registered only so an existing save's chunk diff
+    # can still resolve a leftover trunk/leaves tile id without a KeyError.
+    # Non-solid (user feedback: "a arvore nao pode impedir um mob ou um
+    # player de andar, ela tem que estar atrás").
     id=TREE_TRUNK_ID, name="Tree Trunk", category=TileCategory.NATURAL,
-    color=(101, 67, 33), solid=True, resistance=1.2, required_tool=None,
+    color=(101, 67, 33), solid=False, resistance=1.2, required_tool=None,
     drop_item_id="wood", can_place=False, can_break=True,
 ))
 
 _register(TileDef(
     id=TREE_LEAVES_ID, name="Tree Leaves", category=TileCategory.NATURAL,
-    color=(72, 130, 48), solid=True, resistance=0.6, required_tool=None,
+    color=(72, 130, 48), solid=False, resistance=0.6, required_tool=None,
     drop_item_id="wood", can_place=False, can_break=True,
+))
+
+_register(TileDef(
+    # A whole tree as a single tile (user-supplied sprite art, see
+    # assets/Tiles/Trees.png and Renderer._draw_world's TREE_ID special
+    # case): replaces the old 5-tile trunk+canopy stack with one tile at
+    # the base, so chopping it is one continuous mining action that fells
+    # the whole tree at once ("faça um sistema diferente pra cortar ela,
+    # pra ela cair de uma vez") instead of breaking 5 separate tiles one at
+    # a time. Non-solid for the same reason the old trunk/leaves were.
+    # break_quantity=5 keeps the total wood yield the same as chopping all
+    # 5 of the old tiles individually used to give.
+    id=TREE_ID, name="Tree", category=TileCategory.NATURAL,
+    color=(72, 130, 48), solid=False, resistance=3.0, required_tool=None,
+    drop_item_id="wood", can_place=False, can_break=True, break_quantity=5,
 ))
 
 _register(TileDef(
@@ -346,6 +370,36 @@ _register(TileDef(
     id=PERSONAL_CHEST_ID, name="Personal Chest", category=TileCategory.STRUCTURAL,
     color=(165, 120, 55), solid=True, resistance=1.2, required_tool=None,
     drop_item_id="personal_chest", can_place=True, can_break=True,
+))
+
+# --- Building: Doors & Beds (see game/world/doors.py, shelter.py) ---
+# A Door is two real tile ids, toggled by T while standing near one --
+# the same "swap the stored tile id" trick Falling Platform already uses
+# for its crumble/respawn transition (World.set_tile), just player-driven
+# instead of timer-driven. Placing the item always creates the closed
+# (solid) tile; the open one is only ever reached by toggling, never
+# placed directly -- but breaking either state still drops the item, so
+# opening a door never costs you the ability to pick it back up.
+_register(TileDef(
+    id=DOOR_CLOSED_ID, name="Wood Door", category=TileCategory.STRUCTURAL,
+    color=(120, 80, 45), solid=True, resistance=0.8, required_tool=None,
+    drop_item_id="door", can_place=True, can_break=True,
+))
+
+_register(TileDef(
+    id=DOOR_OPEN_ID, name="Wood Door (Open)", category=TileCategory.STRUCTURAL,
+    color=(120, 80, 45), solid=False, resistance=0.8, required_tool=None,
+    drop_item_id="door", can_place=False, can_break=True, transparent=True,
+))
+
+# A Bed: press T nearby to skip to morning (GameApp.try_sleep), but only
+# at night and only inside a real, bounded, walled-and-roofed space (see
+# game/world/shelter.py). Non-solid -- the player stands on it, same as
+# Checkpoint, rather than beside it like a Chest.
+_register(TileDef(
+    id=BED_ID, name="Bed", category=TileCategory.STRUCTURAL,
+    color=(180, 60, 70), solid=False, resistance=0.8, required_tool=None,
+    drop_item_id="bed", can_place=True, can_break=True,
 ))
 
 

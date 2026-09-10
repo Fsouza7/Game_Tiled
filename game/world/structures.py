@@ -4,7 +4,7 @@ Same determinism contract as everything else in world generation (see
 world_generator.py's module docstring): every structure is a pure function
 of (seed, slot_index), where a slot is a coarse column range -- the exact
 same pattern trees use (world_generator._tree_center_for_slot /
-_tree_role_at), just at a much wider slot width since structures are
+_nearest_tree_center), just at a much wider slot width since structures are
 rarer and bigger. Any column can independently re-derive which slot it
 belongs to and what (if anything) that slot contains, with no dependency
 on generation order -- required for lazy, out-of-order chunk loading.

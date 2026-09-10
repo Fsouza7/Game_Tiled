@@ -81,6 +81,10 @@ class World:
     def reveal_map_around(self, center_x_px: float, center_y_px: float) -> None:
         exploration.reveal_around(self, center_x_px, center_y_px)
 
+    def reveal_map_fully(self) -> None:
+        """Debug/cheat shortcut -- see GameApp.debug_reveal_map."""
+        exploration.reveal_all(self)
+
     def get_chest_inventory(self, tile_x: int, tile_y: int) -> Inventory:
         """Returns the given Chest tile's loot -- rolled once, the first
         time this is called for that position, then the same Inventory
@@ -203,6 +207,18 @@ class World:
         chunk = self.get_or_create_chunk(self.chunk_index_for(x))
         chunk.set_tile(x % CHUNK_WIDTH, y, tile_id)
         return True
+
+    def set_tile(self, x: int, y: int, tile_id: int) -> None:
+        """A direct, unconditional tile-id swap -- no can_place/support/
+        AIR_ID checks, unlike try_place_tile. For state transitions on an
+        already-placed tile (a Door toggling open/closed, see
+        game/world/doors.py) rather than placing a brand new one; the
+        Falling Platform crumble/respawn logic above already does this
+        same swap inline, this is just the reusable, public version."""
+        if not self.in_bounds(x, y):
+            return
+        chunk = self.get_or_create_chunk(self.chunk_index_for(x))
+        chunk.set_tile(x % CHUNK_WIDTH, y, tile_id)
 
     # --- moving hazards (Saw/Rock Head/Spike Head, see hazard_feature.py) ---
     def iter_hazard_anchors(self) -> Iterator[HazardAnchor]:

@@ -13,6 +13,7 @@ def setup_function(_):
     # docstring for why) -- reset it so each test observes a clean build,
     # independent of whatever earlier tests in the suite already did.
     sfx._sound_bytes = {}
+    sfx._volume = 1.0
 
 
 # --- waveform builders ---
@@ -115,11 +116,54 @@ def test_build_sound_bank_covers_every_effect_key_with_nonempty_audio():
     expected_keys = {
         "mine_tick", "mine_break", "melee_swing", "ranged_shoot",
         "hit_player", "hit_enemy", "craft_complete", "smelt_complete",
-        "level_up", "chest_open",
+        "level_up", "chest_open", "ui_tick", "sleep",
     }
     assert set(bank) == expected_keys
     for key, samples in bank.items():
         assert len(samples) > 0, f"{key} produced no samples"
+
+
+# --- volume control (Settings screen's SFX Volume slider) ---
+
+def test_set_volume_clamps_to_0_1_range():
+    try:
+        sfx.set_volume(1.5)
+        assert sfx._volume == 1.0
+        sfx.set_volume(-0.5)
+        assert sfx._volume == 0.0
+        sfx.set_volume(0.42)
+        assert sfx._volume == 0.42
+    finally:
+        sfx.set_volume(1.0)  # don't leak state into other tests
+
+
+def test_play_applies_the_current_volume_to_the_sound(monkeypatch):
+    # pygame.mixer.Sound is a built-in extension type -- its methods can't
+    # be monkeypatched directly, so this replaces the module-level
+    # constructor sfx.play() calls (a plain attribute of the `pygame.mixer`
+    # module, unlike the type itself) with a recording fake instead.
+    pygame.init()
+    try:
+        sfx.init()
+        sfx.set_volume(0.33)
+        recorded = []
+
+        class _FakeSound:
+            def __init__(self, buffer):
+                pass
+
+            def set_volume(self, value):
+                recorded.append(value)
+
+            def play(self):
+                pass
+
+        monkeypatch.setattr(pygame.mixer, "Sound", _FakeSound)
+        sfx.play("mine_tick")
+        assert recorded == [0.33]
+    finally:
+        sfx.set_volume(1.0)
+        pygame.quit()
 
 
 # --- init/play lifecycle ---

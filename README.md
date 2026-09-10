@@ -116,12 +116,14 @@ you're in the world.
 | Craft a recipe / start a smelt job (while crafting is open) | Left-click its row |
 | Scroll the crafting list (while crafting is open) | Mouse wheel |
 | Open/close Skills (levels + skill-point tree) | K |
-| Talk to a nearby NPC, or open a Personal Chest | T |
+| Talk to a nearby NPC, open a Chest, toggle a Door, or sleep in a Bed | T |
 | Use equipped accessory (Grapple Hook) | E |
 | Select a skill / unlock an eligible tree node (while Skills is open) | Left-click it |
 | Attack (melee or ranged -- select a weapon in the hotbar first) | Left-click |
 | Pause (opens a real menu: Resume/Settings/Save/Load/Restart/Quit) | Esc |
 | Debug overlay (FPS, pos, chunk, seed, enemy count, day/time/ambient) | F3 |
+| Toggle debug mode (see "How the debug tools work") | F4 |
+| Debug: unlock all recipes / reveal map / full heal + coins / spawn all bosses / spawn all enemies / teleport to cursor / teleport to spawn (debug mode only) | F5 / F6 / F7 / F8 / F9 / F10 / F11 |
 
 Combat: with any weapon selected, the character continuously faces the
 mouse cursor (a small crosshair reticle marks the aim point -- yellow for
@@ -222,21 +224,38 @@ Design choices worth knowing about:
   function of `(seed, x, y)` — no dependency on neighboring columns or the
   order chunks are generated in. That's what makes lazy loading safe and
   the same seed reproducible.
-- **Art reuse**: tiles are sliced from `assets/Terrain/Terrain.png` and the
-  player uses the `assets/MainCharacters/NinjaFrog` sprite sheets (both
-  already present in this repo). Only grass, dirt and one stone-brick tile
-  have dedicated art in that sheet; everything else (ore, bedrock,
-  workbench, tree trunk/leaves, planks) reuses the closest base sprite with
-  a color tint *plus* a small procedural detail -- speckles for ore,
-  bark/plank lines, a tabletop band for the workbench -- so it reads as a
-  distinct material instead of a flat color wash (see
-  `game/rendering/assets.py`). A tile with no mapped texture at all falls
-  back to its `TileDef.color` as a flat rectangle. The same idea applies to
-  item icons: a block/ore/material icon reuses its tile's texture
-  (`ItemDef.places_tile_id`/`icon_tile_id`); the handful of items with
-  neither a tile nor sprite to borrow (pickaxes, sword, bow, arrow, helmet,
-  armor -- this asset pack has no tool/weapon/armor icons) get a small
-  hand-drawn vector icon instead of an anonymous color swatch.
+- **Art reuse**: `GRASS_ID`/`DIRT_ID` are sliced from a user-supplied
+  `assets/Tiles/Tileset Outside.png` and `STONE_ID` from `Tileset Inside.png`
+  (32px autotile-style sheets; only one representative cell per tile id is
+  used, not the full neighbor-aware autotiling both sheets have the pieces
+  for -- see `_OUTSIDE_TILESET_CELLS`/`_INSIDE_TILESET_CELLS` in
+  `game/rendering/assets.py`), and the player uses the
+  `assets/MainCharacters/NinjaFrog` sprite sheets. Everything else (ore,
+  bedrock, workbench, the legacy tree trunk/leaves, planks, every biome's
+  ground/deep-stone variant) reuses the closest base sprite (grass/dirt/
+  stone) with a color tint *plus* a small procedural detail -- speckles for
+  ore, bark/plank lines, a tabletop band for the workbench -- so it reads as
+  a distinct material instead of a flat color wash. A tile with no mapped
+  texture at all falls back to its `TileDef.color` as a flat rectangle. The
+  same idea applies to
+  item icons: a block icon reuses its tile's texture
+  (`ItemDef.places_tile_id`/`icon_tile_id`). A user-supplied icon sheet
+  (`assets/Items/#2 - Transparent Icons & Drop Shadow.png`, ~350 hand-drawn
+  fantasy RPG icons on a 16-col x 32px-cell grid, `game/rendering/assets.py`)
+  now covers nearly every item that isn't a placeable block: direct crops
+  for single-icon matches (`_SHEET_ICON_CELLS` -- Wood Sword, Wood Bow,
+  Grapple Hook, Slime Gel, Feather, Coin, the five ore items, and three
+  boss items -- Slime Core Idol/Slime King's Core/Crown -- that previously
+  had no icon at all), plus a `_colorize(base, color)` helper (recolors a
+  real icon by its own luminosity, not a flat alpha wash, so it keeps its
+  shading) that turns one real shape into several tinted tiers: the 5
+  pickaxes, the 6 bars, 13 armor pieces across wood/iron/steel + a
+  standalone Arcane Helm, both summon rods, and the Arcane Staff (see
+  `_PICKAXE_BASE_CELL`/`_INGOT_BASE_CELL`/`_ARMOR_BASE_CELLS`/
+  `_CROWN_BASE_CELL`). Only the Arrow icon is still a hand-drawn vector
+  shape (`_build_procedural_icons`) -- no matching ammo art exists in the
+  sheet. Placeable blocks/decorations and the 8 fruit items (dedicated real
+  sprites) were deliberately left alone.
 
 ## How to add a new tile
 
@@ -270,24 +289,82 @@ Add one `ItemDef` entry in `game/items/item_registry.py` with a `category`
 - **Icon**: resolution order is `places_tile_id` (block/decoration -- uses
   the tile's own texture) -> `icon_tile_id` (borrow any tile's texture
   without being placeable, e.g. an ore or raw material) -> `icon_key`
-  (looked up in `game/rendering/assets.py`: either a real sprite added to
-  `_STATIC_ICON_SOURCES`, or a hand-drawn vector icon added to
-  `_build_procedural_icons`) -> a flat color swatch by category as the last
+  (looked up in `game/rendering/assets.py`: a real sprite added to
+  `_STATIC_ICON_SOURCES`, a cell from the user-supplied icon sheet added to
+  `_SHEET_ICON_CELLS` (or, for a tiered item, a base cell + `_colorize` tint
+  added to one of the `_PICKAXE_BASE_CELL`/`_INGOT_BASE_CELL`/
+  `_ARMOR_BASE_CELLS`-style tables), or a hand-drawn vector icon added to
+  `_build_procedural_icons` -- the sheet wins over a vector icon registered
+  under the same key) -> a flat color swatch by category as the last
   resort. Prefer `icon_tile_id` over a flat swatch whenever the item
-  corresponds to an existing tile.
+  corresponds to an existing tile, unless a clean single-icon match already
+  exists in the sheet (see the ore items, which now prefer that over their
+  own tile's texture). Before adding a new sheet cell, zoom in on a
+  column-labeled crop of the sheet first -- two cells were mis-picked from
+  the thumbnail early on (a plain wooden staff looked like a hook at a
+  glance) and had to be corrected once rendered at real size.
 
 ## How trees work
 
 Trees are generated the same deterministic way as everything else: the
 world is divided into fixed-width slots (`TREE_SLOT_WIDTH`), and each slot
 independently rolls whether it contains one tree and at which column
-(`TREE_SPAWN_CHANCE_PER_SLOT`, in `world_generator.py`). A tree is a 3-tile
-trunk (`TREE_TRUNK_ID`) topped with a small canopy (`TREE_LEAVES_ID`)
-spanning that column and its two neighbors. Both trunk and leaves drop
-`wood` when broken. This keeps the "any column can be generated
-independently, in any order" guarantee: a column figures out its own role
-(trunk / canopy / none) by re-deriving its slot's roll and its neighbors'
-rolls, without needing those columns to already exist.
+(`TREE_SPAWN_CHANCE_PER_SLOT`, in `world_generator.py`). This keeps the
+"any column can be generated independently, in any order" guarantee: a
+column figures out whether it's a tree's own column, or just within a
+nearby tree's footprint, purely by re-deriving its slot's roll
+(`_nearest_tree_center`), without needing neighboring columns to already
+exist.
+
+A tree is a **single tile** (`TREE_ID`, placed at the trunk's base) that
+renders as a real sprite from a user-supplied `assets/Tiles/Trees.png` (two
+64x96 variants, picked by a deterministic hash of the tile's own column) --
+not the stacked trunk+canopy tile blocks this game originally shipped with.
+`Renderer._draw_world` special-cases `TREE_ID`: it collects every tree tile
+seen during the normal per-tile pass and draws their sprites in a second
+pass afterward, anchored bottom-center on their one tile but spanning 2
+tiles wide x 3 tiles tall -- doing it as a second pass (rather than inline,
+like every other tile) means a tree's overlap into a neighboring column
+never gets painted back over by that column's own (later-drawn) ground
+tile. `TREE_ID` is `solid=False`, same as the tile system it replaced, so
+it doesn't block movement (user feedback: a tree shouldn't be able to
+block a chase) -- and since it only ever sits *above* the ground column it
+grows from, that doesn't touch the walkable surface tile underneath either.
+
+**Chopping fells the whole tree at once** (user-requested: "faça um
+sistema diferente pra cortar ela, pra ela cair de uma vez"), simply because
+there's only one tile to break now instead of five (3 trunk + 2 leaf tiles
+the old system chopped separately). `TileDef.break_quantity` (default 1,
+every other tile) is 5 for `TREE_ID`, so that one break still grants a
+whole tree's worth of `wood` -- the same total the old 5-tile version gave,
+just in one drop instead of five (`InputHandler.update_continuous` reads
+`break_quantity` off the tile id *before* `Player.try_mine` breaks it, and
+adds it on top of the usual fortune-chance +1 bonus). The trade-off:
+clicking to chop now has to land on the tree's one actual tile (the trunk's
+base), not anywhere on the wider visual canopy -- the same tradeoff games
+like Terraria make for the same reason.
+
+`TREE_TRUNK_ID`/`TREE_LEAVES_ID`, the old tile ids, are still registered
+(with their original tinted-dirt/grass textures) purely so an existing
+save's chunk diff can still resolve a leftover one without a `KeyError` --
+world generation just never places them anymore.
+
+## How the parallax background works
+
+A user-supplied 4-layer pack (`assets/Backgrounds/`: Sky, Clouds, Rock
+Mountains, Grass Mountains, each a 320x320 PNG) replaced the single flat
+tiled color swatch this game started with. `Renderer._draw_background`
+draws them back to front, each scrolling horizontally at its own speed
+(`settings.BACKGROUND_LAYER_PARALLAX`: 0.0 for Sky up to 0.45 for Grass
+Mountains, the nearest/fastest layer) for a depth cue -- Sky is opaque and
+covers the whole canvas; the other three have a transparent top half and an
+opaque silhouette along the bottom (clouds / distant rock peaks / nearer
+grassy peaks), each pre-scaled once (in `Renderer.__init__`, not per frame)
+to the window's own height. Only the horizontal axis tiles/scrolls: each
+layer is a fixed sky+skyline composition, not a repeating ground texture,
+so tiling vertically would incorrectly stack mountain silhouettes on top of
+each other going up into open sky. All four images are pixel-identical at
+their left and right edges, so horizontal tiling has no visible seam.
 
 ## How the day/night cycle and lighting work
 
@@ -331,6 +408,83 @@ each compute their own local ambient this way (per-column for tiles, per-entity
 position for the player/enemies) before calling `light_level_at`, so a torch
 still lights up its surroundings underground exactly like it does on the
 surface at night -- only now that's true at any hour.
+
+## How enemy spawn density works
+
+`EnemySpawner._current_limits` (`game/entities/enemy_spawner.py`) picks a
+population cap and spawn cadence from *where and when* the player
+currently is, instead of one fixed value for the whole game:
+
+| Situation | Max alive | Spawn interval |
+|---|---|---|
+| Surface, day | `ENEMY_MAX_ALIVE_DAY` (5) | `ENEMY_SPAWN_INTERVAL_DAY_S` (5s) |
+| Surface, night | `ENEMY_MAX_ALIVE_NIGHT` (10) | `ENEMY_SPAWN_INTERVAL_NIGHT_S` (3s) |
+| Underground (any hour) | `ENEMY_MAX_ALIVE_UNDERGROUND` (14) | `ENEMY_SPAWN_INTERVAL_UNDERGROUND_S` (2s) |
+
+"Underground" triggers once the player is `UNDERGROUND_SPAWN_DEPTH_TILES`
+(4) below `World.surface_height_at(x)` -- a few tiles of slack so a
+shallow dip in the terrain doesn't flicker the state -- and **overrides
+day/night entirely**: caves are already dark regardless of the surface
+cycle (see "How the day/night cycle and lighting work" above), so they're
+dangerous at any hour, not just at night.
+
+Enemies previously only ever spawned at the world surface, no matter how
+deep the player actually was. `_underground_spawn_y_tiles` closes that
+gap: it scans vertically near the player's own depth in a random nearby
+column for a real cave spot (a solid floor under open air for ground
+mobs; a flyer just needs one open tile, since it ignores gravity/collision
+entirely -- see `enemy_ai._update_fly`) and simply skips that spawn
+attempt if nothing suitable turns up, rather than silently falling back
+to the surface. The enemy *roster* itself is unchanged -- the same
+biome-weighted picks as the surface (Scorpion still desert-only) show up
+underground too, just more often and at any hour.
+
+## How the Building system works (Doors, Beds & Sleeping)
+
+Houses need no new tile type for their walls -- the existing placeable
+Wood Plank/Stone Blocks already work, and the shelter check below only
+cares about solidity, not tile type. Two new tiles complete the loop:
+
+**Door** (`tile_registry.DOOR_CLOSED_ID`/`DOOR_OPEN_ID`, a Workbench
+recipe: 6 Wood). Press **T** near one to toggle it between solid (closed)
+and passable (open) -- `game/world/doors.py`'s `toggle`, using
+`World.set_tile` (a new generic public method) to swap the actual stored
+tile id, the same trick Falling Platform already uses for its
+crumble/respawn transition, just player-driven instead of timer-driven.
+Breaking either state still drops the same item, so opening a door never
+costs you the ability to pick it back up.
+
+**Bed** (`tile_registry.BED_ID`, a Workbench recipe: 8 Wood + 4 Wood
+Plank). Press T near one to sleep and skip straight to morning
+(`WorldClock.skip_to_morning`, always moving forward in time -- to
+tomorrow's dawn if it's already past today's, or later today otherwise),
+but only **at night**, and only inside a real **enclosed shelter**.
+`beds.try_sleep` returns a human-readable reason on failure (same shape
+as `Player.blocked_mining_reason`) for `InputHandler` to surface as a
+notification.
+
+Shelter detection (`game/world/shelter.py`) is a bounded flood-fill (BFS)
+from the bed's own tile through every reachable non-solid tile:
+- Exhausts within `SHELTER_MAX_AIR_TILES` (200, roughly a 14x14 open
+  interior) -> a real, bounded room -> sleep allowed.
+- Still has tiles left to visit when the cap hits -> the space leaks into
+  the open world (or is simply too big to read as a cozy room) -> sleep
+  refused ("This isn't a safe, enclosed shelter").
+
+A successful sleep triggers a brief black-screen fade-out
+(`GameApp.sleep_fade_remaining_s`/`SLEEP_FADE_DURATION_S`,
+`Renderer._draw_sleep_fade`, drawn over everything including the pause
+overlay) so an instant clock jump reads as a night passing, not a glitch
+-- plus a new soft descending `sleep` sfx (the mirror image of
+`level_up`'s ascending chime) and a "Slept through the night" toast.
+
+Known gaps: no dedicated Door/Bed art (a flat `TileDef.color` swatch,
+same fallback most newer tiles already use -- see
+`Renderer._tile_texture`); doors don't auto-close, animate, or affect
+enemy pathing (enemies don't path around obstacles at all currently); a
+Bed only skips time, it doesn't also become a respawn point (still
+Checkpoint's job); sleeping doesn't clear or otherwise reset nearby
+danger -- whatever was already spawned stays exactly where it was.
 
 ## How health regen works
 
@@ -418,11 +572,41 @@ Esc opens a real menu instead of a plain "PAUSED" label, using the UI
 reskin's wood-plank buttons (see "How the UI theme works"): **Resume**
 unpauses, **Restart** rebuilds the whole run from the same seed
 (`GameApp.restart` -> `_new_run`, keeping the chosen character skin),
-**Quit** exits, and **Settings** opens a small sub-panel
-(`GameApp.settings_open`) with Zoom In/Out and Back -- reusing the camera
-zoom that already existed rather than adding a fake "Settings" button
-with nothing behind it. There's still no audio system (see
-"Cross-cutting" in `TODO.md`), so Settings doesn't have a volume control.
+**Quit** exits, and **Settings** opens a real panel
+(`GameApp.settings_open`, see "How the Settings screen works") with Zoom,
+Music Volume and SFX Volume steppers plus Back.
+
+## How the Settings screen works
+
+A proper panel (`Renderer._draw_settings_panel`, reusing the UI reskin's
+`_draw_panel_chrome`) instead of the original 3 bare buttons floating on
+the pause overlay: one row per adjustable value --
+**Zoom** (the pre-existing camera control), **Music Volume**, **SFX
+Volume** -- each a `-`/`+` stepper (`VOLUME_STEP` per click) around a
+live percentage, plus **Back**.
+
+Music/SFX volume are held on `GameApp.prefs`
+(`game/core/settings_store.py`'s `Settings`), loaded once in
+`GameApp.__init__` -- deliberately *not* in `_new_run`, since preferences
+aren't part of "one playthrough": Restart and Load must never reset how
+loud the player set things, unlike `world`/`player`/everything else that
+gets rebuilt there. Preferences persist to `saves/settings.json`
+(separate from the save slot itself) via `GameApp.adjust_music_volume`/
+`adjust_sfx_volume`, which clamp to 0-1, apply immediately
+(`pygame.mixer.music.set_volume` / a new `sfx.set_volume` -- a master
+gain applied per-`Sound` at `play()` time, not baked into the cached
+waveform bytes, so it takes effect without re-synthesizing anything) and
+save on every click, and write to disk on every adjustment. A missing or
+corrupt settings file degrades to defaults instead of blocking boot, same
+"never crash on this" precedent `sfx.py`/`music.py` already set for audio
+itself. A tiny new `ui_tick` sfx plays on every SFX Volume click, doubling
+as instant feedback for the level just set.
+
+Known gaps: no master mute-all toggle (Music and SFX are independent
+sliders only), and no volume control on the title screen itself (the
+pause menu's Settings only exists once a run is in progress -- background
+music already plays there, just isn't adjustable until you start/continue
+a game).
 
 ## How Checkpoints work
 
@@ -803,6 +987,49 @@ a random drop); this one is storage. T prefers an NPC if both are in
 range. The stash round-trips through save/load; old saves without the
 field start empty. Texture is `assets/Items/Boxes/Box3`.
 
+## How ground AI steps over ledges
+
+`tile_collision.try_step_up(entity, world, direction)` climbs a genuine
+1-tile ledge onto flat ground instead of treating it as a wall; a real
+(2+ tile) obstacle is left alone. `WALK`-type enemies (`enemy_ai._update_walk`)
+call it every frame before committing to a direction, alongside
+`is_solid_ahead` (turn around if blocked and unclimbable) and
+`has_ground_ahead` (turn around before walking off a ledge) -- without it,
+ground AI would reverse at every bump in the naturally-bumpy generated
+terrain and never get anywhere.
+
+`HOP`-type enemies (`enemy_ai._update_hop`, and the Slime King boss's own
+`boss_ai._update_hop_movement`) call it too, right before the horizontal
+`move_axis` each frame while airborne. A hop only sets its horizontal
+velocity once, at launch, and never revisits it mid-flight, and
+`move_axis` zeroes that velocity outright the instant any part of the
+mover's hitbox clips a solid tile -- so a 1-tile bump anywhere under a
+hop's arc used to stall it dead on contact; since the AI re-aims at the
+same target every following hop cycle, the visible result was the
+enemy/boss looking like it was bouncing in place against an invisible
+wall (user-reported: "fica pulando no mesmo lugar infinito").
+
+Both `is_solid_ahead` and `try_step_up` check every tile row an entity's
+height actually spans (`tile_collision._entity_row_span`), not just a
+single mid-height row -- a no-op for the ~1-tile-tall regular enemies
+(their span is always one row already) but necessary for the 1.8-tile-tall
+Slime King boss, whose hitbox can clip a bump at its feet that a check at
+its mid-height alone would miss entirely.
+
+Both also probe from `tile_collision._leading_tile_column(entity, direction)`
+rather than always exactly `center + direction`: for anything up to a tile
+wide the two are identical, but the 2.4-tile-wide Slime King boss's real
+leading edge (what `move_axis`'s own collision resolves against) can sit a
+full tile or more past its own center+1. On a perfectly smooth staircase
+where each column individually only ever rises 1 tile, that let the boss's
+wide body catch a *2-tile* total rise across its own footprint that a
+center-only probe never looked at, freezing it permanently (user-reported,
+after the single-bump fix above had already shipped: "o boss ainda fica
+preso em um terreno desnivelado"). `try_step_up` also takes a
+`max_step_tiles` (default 1, matched to the 1-tile bumps every other
+entity needs); the boss passes 2, sized to the worst-case rise its own
+width can catch -- a genuine 3+-tile wall is still left blocking it.
+
 ## How to create an enemy
 
 Add one `EnemyDef` entry in `game/entities/enemy_registry.py`: `ai_type`
@@ -852,16 +1079,46 @@ Bar) and press **G** with it selected (`Player.use_selected_summon_item` ->
 **Phases**, keyed off remaining-health ratio and permanent once entered
 (health only ever goes down):
 - **Phase 1** (>66%): hops toward the player (same shape as the regular
-  Slime's `HOP` AI, just bigger/harder), contact damage only.
-- **Phase 2** (<=66%): also lobs a gravity-arced **Slime Lob** projectile
-  on a cooldown -- `EnemyProjectile` (`game/combat/enemy_projectile.py`) is
-  the enemy-owned mirror of the player's `Projectile`, resolved against the
-  player by `combat_system.update_enemy_projectiles`.
+  Slime's `HOP` AI, just bigger/harder), contact damage, and already lobs a
+  gravity-arced **Slime Lob** projectile on a cooldown -- `EnemyProjectile`
+  (`game/combat/enemy_projectile.py`) is the enemy-owned mirror of the
+  player's `Projectile`, resolved against the player by
+  `combat_system.update_enemy_projectiles`. (Ranged attacks used to only
+  unlock at phase 2; a player who never brought the boss that low would go
+  a whole fight without ever seeing a projectile, so the lob now fires from
+  the very start.)
+- **Phase 2** (<=66%): hops and lobs faster.
 - **Phase 3** (<=33%, enrage): summons 2 regular Slimes once, hops/lobs
-  faster, and every landing sets `Boss.stomp_pending` -- a shockwave
-  (`combat_system.resolve_boss_stomp`) that damages the player within
-  `SLIME_KING_STOMP_RADIUS_TILES` even without a direct hitbox overlap,
-  unlike ordinary contact damage.
+  even faster, the lob becomes a `SLIME_KING_SPREAD_COUNT`-projectile fan
+  (`boss_ai._fire_projectiles`) instead of a single shot, and every landing
+  sets `Boss.stomp_pending` -- a shockwave (`combat_system.resolve_boss_stomp`)
+  that damages the player within `SLIME_KING_STOMP_RADIUS_TILES` even
+  without a direct hitbox overlap, unlike ordinary contact damage.
+
+**The hop leads its target** (`boss_ai._update_hop_movement`) -- it used
+to aim at wherever the player was standing the instant it launched, then
+commit to that fixed horizontal velocity for the whole arc, an easy dodge
+made worse by `SLIME_KING_MOVE_SPEED` originally being *slower* than the
+player's own move speed. It now solves for the player's *predicted*
+position at landing time (current position + their own `x_vel` * the
+arc's time-of-flight, derived from `SLIME_KING_HOP_IMPULSE`/`GRAVITY`),
+capped at `move_speed * phase_mult * SLIME_KING_HOP_LEAD_SPEED_MULT` so a
+far-away target doesn't demand an absurd lunge -- and is faster than the
+player outright.
+
+**It steps over bumps mid-hop** (`tile_collision.try_step_up`, called
+right before the horizontal `move_axis` in `boss_ai._update_hop_movement`,
+same as every regular `HOP`-type enemy's `_update_hop` -- see "How ground
+AI steps over ledges" below, including why the boss passes
+`max_step_tiles=2` where every other entity uses the default of 1). At
+`SLIME_KING_HEIGHT_TILES`/`SLIME_KING_WIDTH_TILES` (1.8 x 2.4) the boss's
+hitbox spans two tile rows and can reach a leading-edge column a full 2
+tiles taller than the one under its own center, even on a perfectly smooth
+1-tile-per-column staircase -- either used to zero its horizontal velocity
+outright (`move_axis` zeroes the matching velocity component on any
+collision) and strand it at the bump until the next hop cycle re-aimed
+from scratch, looking like it was bouncing in place forever. A real (3+
+tile) wall still blocks it.
 
 A persistent bar at top-center shows its name, HP and current phase number
 from the moment it's summoned (not just once damaged, like the small
@@ -1071,6 +1328,38 @@ transient state `_new_run` already resets on Restart. Their buttons are
 the UI reskin's Save/Load wood-plank art (see "How the UI theme works")
 -- no hand-drawn icon needed for these two anymore.
 
+## How the debug tools work
+
+Two independent layers, both in `game/core/debug_overlay.py` /
+`GameApp`:
+
+- **F3** toggles the read-only debug HUD (FPS, seed, position, chunk,
+  loaded chunk count, HP/regen, zoom, enemy/NPC counts, biome, day/time/
+  ambient) -- unchanged, always available, no state it can accidentally
+  mutate.
+- **F4** toggles `GameApp.debug_mode`, a dev-session flag (like
+  `prefs` -- not reset by `_new_run`/Restart/Load, since it has nothing
+  to do with "one playthrough") that gates seven cheat actions, **F5-F11**,
+  so a stray keypress during normal play can never trigger one. While on,
+  a red "DEBUG MODE" banner plus the shortcut list is always shown (even
+  with F3's own overlay off), stacked above it when both are on.
+
+| Key | Action |
+|---|---|
+| F5 | `debug_unlock_all_recipes` -- marks every registered item id as discovered (`Player.discovered_item_ids`). Recipe visibility is ingredient-discovery-based, not a recipe-id allowlist (see `crafting_system.is_recipe_discovered`), so this is the whole item catalog, not the recipe list |
+| F6 | `debug_reveal_map` -- `World.reveal_map_fully()` -> `exploration.reveal_all`, the same per-cell sampling the real Map (M) fog-of-war reveal uses, just with no radius limit. Forces every not-yet-loaded chunk to generate (cheap and deterministic, a one-time cost) |
+| F7 | `debug_restock` -- full heal plus `DEBUG_RESTOCK_COINS` (999) Coins |
+| F8 | `debug_spawn_all_bosses` -- one of every `AIType.BOSS` `EnemyDef` (currently just the Slime King), spawned as real `Boss` instances beside the player. Bypasses `try_summon_boss`'s idol/one-at-a-time gating entirely -- this is a raw debug spawn, not the normal G-key summon path |
+| F9 | `debug_spawn_all_enemies` -- one of every non-boss `EnemyDef` (Slime, Crawler, Duskwing, Scorpion), each offset `DEBUG_SPAWN_SPACING_TILES` apart so they don't stack on landing |
+| F10 | `debug_teleport_to` -- teleports to the current mouse cursor's world position (`camera.screen_to_world`), clearing velocity/jump state the same way a respawn does |
+| F11 | `debug_teleport_to_spawn` -- back to `Player.spawn_x/spawn_y` (the last Checkpoint, or the world spawn if none was ever touched) |
+
+None of these validate the destination/target is safe (solid ground under
+a teleport, a sensible spot for a spawned enemy) -- same "developer
+convenience, not a polished feature" scope as the rest of this list; the
+regular world-generation/collision systems settle anything that lands
+oddly on the very next physics step.
+
 ## How the UI theme works
 
 A user-supplied asset pack landed in `assets/validar` (also reachable as
@@ -1168,9 +1457,9 @@ unused after this pass and was deleted rather than left as dead code.
   -- every other tile still has exactly one fixed `drop_item_id`.
 - Inventory/crafting UIs are click-driven panels (equip, unequip, craft,
   scroll), not full drag-and-drop or animated interfaces.
-- The pause menu's Settings only has Zoom (the one thing already fully
-  working) -- no audio controls, since there's still no audio system, and
-  no world-select screen.
+- The pause menu's Settings has Zoom, Music Volume and SFX Volume (see
+  "How the Settings screen works") but no master mute-all toggle, no
+  volume control on the title screen itself, and no world-select screen.
 - Saw/Rock Head/Spike Head swing on a fixed rhythm (a sine oscillation of
   elapsed time) rather than charging when the player gets close -- see
   "How moving hazards work" for why.

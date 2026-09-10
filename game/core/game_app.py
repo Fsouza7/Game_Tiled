@@ -8,6 +8,7 @@ from game.settings import (
     TILE_SIZE, DEFAULT_SEED, WORLD_WIDTH_TILES, HITPOINTS_HP_PER_LEVEL,
     CRAFTING_XP_PER_SMELT, BOSS_COIN_BOUNTY, STATION_SEARCH_RADIUS_TILES,
     CAMERA_HIT_SHAKE_DURATION_S, CAMERA_HIT_SHAKE_PX_PER_DAMAGE, CAMERA_HIT_SHAKE_MAX_PX,
+    SLEEP_FADE_DURATION_S, DEBUG_RESTOCK_COINS, DEBUG_SPAWN_SPACING_TILES,
 )
 from game.world.world import World
 from game.world.tile_registry import PERSONAL_CHEST_ID
@@ -15,6 +16,8 @@ from game.world import checkpoints
 from game.entities.player import Player
 from game.entities import enemy_ai, boss_ai, enemy_registry, summon_ai, character_registry, class_registry
 from game.entities.boss import Boss
+from game.entities.enemy import Enemy
+from game.entities.enemy_def import AIType
 from game.entities.enemy_spawner import EnemySpawner
 from game.combat import combat_system
 from game.crafting import crafting_system
@@ -29,6 +32,7 @@ from game.core.notifications import NotificationQueue
 from game.core import save_system
 from game.core import music
 from game.core import sfx
+from game.core import settings_store
 from game.input.input_handler import InputHandler
 from game.rendering.renderer import Renderer
 from game.rendering.particles import ParticleSystem
@@ -46,13 +50,27 @@ class GameApp:
         pygame.display.set_caption(WINDOW_TITLE)
         self.window = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         self.clock = pygame.time.Clock()
-        music.start_background_music()
+        # Preferences load once here, not in _new_run -- they're not part
+        # of "one playthrough" and must survive Restart/Load untouched
+        # (see settings_store.py's module docstring). Reads
+        # settings_store.SETTINGS_FILE_PATH at call time (not via load's
+        # own default arg, bound once at import time), same reasoning as
+        # save_game's SAVE_FILE_PATH comment -- so tests can monkeypatch
+        # it to a temp path without touching the real preferences file.
+        self.prefs = settings_store.load(settings_store.SETTINGS_FILE_PATH)
+        music.start_background_music(self.prefs.music_volume)
         sfx.init()
+        sfx.set_volume(self.prefs.sfx_volume)
 
         self.seed = seed
         self.input_handler = InputHandler()
         self.renderer = Renderer()
         self.debug_overlay = DebugOverlay()
+        # F4 toggles this; the F5-F11 cheats below are all gated on it so
+        # they can never fire from a stray keypress during normal play.
+        # A dev-session toggle like `prefs` -- not reset by _new_run/
+        # Restart/Load, since it has nothing to do with "one playthrough".
+        self.debug_mode = False
 
         # Boot order: title (Continue / New Game) -> character select ->
         # class select. Player already exists with the default skin/class
@@ -95,6 +113,7 @@ class GameApp:
         self.furnace_manager = FurnaceManager()
         self.notifications = NotificationQueue()
         self._dust_step_cooldown = 0.0
+        self.sleep_fade_remaining_s = 0.0
 
         self.paused = False
         self.inventory_open = False
@@ -114,6 +133,17 @@ class GameApp:
 
     def restart(self) -> None:
         self._new_run(self.seed, self.player.character_id, self.player.class_id)
+
+    def adjust_music_volume(self, delta: float) -> None:
+        self.prefs.music_volume = max(0.0, min(1.0, self.prefs.music_volume + delta))
+        music.set_volume(self.prefs.music_volume)
+        settings_store.save(self.prefs, settings_store.SETTINGS_FILE_PATH)
+
+    def adjust_sfx_volume(self, delta: float) -> None:
+        self.prefs.sfx_volume = max(0.0, min(1.0, self.prefs.sfx_volume + delta))
+        sfx.set_volume(self.prefs.sfx_volume)
+        settings_store.save(self.prefs, settings_store.SETTINGS_FILE_PATH)
+        sfx.play("ui_tick")  # immediate feedback for the level just set
 
     def grant_class_starting_item(self) -> None:
         """Grants the player's class starting item, if it has one (e.g.
@@ -163,6 +193,7 @@ class GameApp:
         self.npc_spawner.quiet_until_synced = True
         self.notifications = NotificationQueue()
         self._dust_step_cooldown = 0.0
+        self.sleep_fade_remaining_s = 0.0
 
         self.paused = False
         self.inventory_open = False
@@ -221,9 +252,8 @@ class GameApp:
                     continue  # bosses run their own AI below, not enemy_ai's WALK/HOP/FLY dispatch
                 enemy_ai.update(enemy, self.world, self.player, dt)
             for boss in [e for e in self.enemies if isinstance(e, Boss)]:
-                projectile, minions = boss_ai.update(boss, self.world, self.player, dt)
-                if projectile is not None:
-                    self.enemy_projectiles.append(projectile)
+                projectiles, minions = boss_ai.update(boss, self.world, self.player, dt)
+                self.enemy_projectiles.extend(projectiles)
                 self.enemies.extend(minions)
             for summon in self.summons:
                 summon_ai.update(summon, self.world, self.player, self.enemies, dt)
@@ -249,6 +279,7 @@ class GameApp:
             self.damage_numbers.update(dt)
             self.notifications.update(dt)
             self.camera.update(dt)
+            self.sleep_fade_remaining_s = max(0.0, self.sleep_fade_remaining_s - dt)
 
             self.camera.follow(self.player.center_x, self.player.center_y)
 
@@ -265,8 +296,12 @@ class GameApp:
             damage_numbers=self.damage_numbers, chest_open=self.chest_open,
             chest_storage=self.active_chest_inventory() if self.chest_open else None,
             enemy_projectiles=self.enemy_projectiles, map_open=self.map_open,
+            prefs=self.prefs, sleep_fade_ratio=self.sleep_fade_remaining_s / SLEEP_FADE_DURATION_S,
         )
-        self.debug_overlay.draw(self.window, self.clock, self.player, self.world, self.camera, self.enemies, self.world_clock, npcs=self.npcs)
+        self.debug_overlay.draw(
+            self.window, self.clock, self.player, self.world, self.camera, self.enemies, self.world_clock,
+            npcs=self.npcs, debug_mode=self.debug_mode,
+        )
         pygame.display.flip()
 
     def try_summon_boss(self) -> None:
@@ -286,6 +321,64 @@ class GameApp:
         spawn_y = self.player.center_y - (boss_def.height_tiles * TILE_SIZE) / 2
         self.enemies.append(Boss(boss_def, spawn_x, spawn_y))
         self.notifications.push(f"{boss_def.name} has appeared!")
+
+    # --- debug/cheat tools (F4 toggles debug_mode; F5-F11 while it's on --
+    # see InputHandler._handle_keydown and README "How the debug tools work") ---
+
+    def debug_unlock_all_recipes(self) -> None:
+        """Every recipe's ingredients are marked discovered at once --
+        recipe visibility is ingredient-discovery-based, not a recipe-id
+        allowlist (see crafting_system.is_recipe_discovered), so this is
+        just every registered item id, not the recipe list itself."""
+        self.player.discovered_item_ids |= set(item_registry.all_items().keys())
+        self.notifications.push("Debug: every recipe unlocked")
+
+    def debug_reveal_map(self) -> None:
+        self.world.reveal_map_fully()
+        self.notifications.push("Debug: map fully revealed")
+
+    def debug_restock(self) -> None:
+        self.player.health = self.player.max_health
+        self.player.collect_item("coin", DEBUG_RESTOCK_COINS)
+        self.notifications.push(f"Debug: full heal + {DEBUG_RESTOCK_COINS} coins")
+
+    def debug_spawn_all_bosses(self) -> None:
+        """Bypasses try_summon_boss's idol/one-at-a-time gating entirely --
+        this is a raw debug spawn, not the normal summon path."""
+        spawned = 0
+        for enemy_def in enemy_registry.all_enemies():
+            if enemy_def.ai_type != AIType.BOSS:
+                continue
+            offset = TILE_SIZE * (4 + spawned * DEBUG_SPAWN_SPACING_TILES)
+            spawn_x = self.player.center_x - offset - (enemy_def.width_tiles * TILE_SIZE) / 2
+            spawn_y = self.player.center_y - (enemy_def.height_tiles * TILE_SIZE) / 2
+            self.enemies.append(Boss(enemy_def, spawn_x, spawn_y))
+            spawned += 1
+        self.notifications.push(f"Debug: spawned {spawned} boss(es)" if spawned else "Debug: no bosses registered")
+
+    def debug_spawn_all_enemies(self) -> None:
+        spawned = 0
+        for enemy_def in enemy_registry.all_enemies():
+            if enemy_def.ai_type == AIType.BOSS:
+                continue
+            offset = TILE_SIZE * (3 + spawned * DEBUG_SPAWN_SPACING_TILES)
+            spawn_x = self.player.center_x + offset
+            spawn_y = self.player.y
+            self.enemies.append(Enemy(enemy_def, spawn_x, spawn_y))
+            spawned += 1
+        self.notifications.push(f"Debug: spawned {spawned} enemy types")
+
+    def debug_teleport_to(self, world_x_px: float, world_y_px: float) -> None:
+        self.player.x = world_x_px - self.player.width / 2
+        self.player.y = world_y_px - self.player.height / 2
+        self.player.x_vel = 0.0
+        self.player.y_vel = 0.0
+        self.player.jump_count = 0
+        self.player.hook_target = None
+        self.notifications.push("Debug: teleported")
+
+    def debug_teleport_to_spawn(self) -> None:
+        self.debug_teleport_to(self.player.spawn_x + self.player.width / 2, self.player.spawn_y + self.player.height / 2)
 
     def close_npc_panel(self) -> None:
         self.talking_to = None

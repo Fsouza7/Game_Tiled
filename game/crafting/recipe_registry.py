@@ -254,6 +254,22 @@ _register(RecipeDef(
     station_tile_id=WORKBENCH_ID,
 ))
 
+# --- Building: Doors & Beds (user-requested construction system) ---
+
+_register(RecipeDef(
+    id="door", name="Wood Door",
+    ingredients=(("wood", 6),),
+    result_item_id="door", result_quantity=1,
+    station_tile_id=WORKBENCH_ID,
+))
+
+_register(RecipeDef(
+    id="bed", name="Bed",
+    ingredients=(("wood", 8), ("wood_plank_block", 4)),
+    result_item_id="bed", result_quantity=1,
+    station_tile_id=WORKBENCH_ID,
+))
+
 # --- Boss: Slime King (Phase 10) ---
 
 _register(RecipeDef(

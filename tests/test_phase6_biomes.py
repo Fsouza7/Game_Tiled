@@ -14,7 +14,7 @@ from game.world.world import World
 from game.world.world_generator import biome_at, generate_column
 from game.world.tile_registry import (
     GRASS_ID, DIRT_ID, SAND_ID, SANDSTONE_ID, SNOW_BLOCK_ID, FROZEN_DIRT_ID,
-    JUNGLE_GRASS_ID, MUD_ID, CACTUS_ID, TREE_TRUNK_ID, AIR_ID, STONE_ID,
+    JUNGLE_GRASS_ID, MUD_ID, CACTUS_ID, TREE_ID, AIR_ID, STONE_ID,
     DESERT_STONE_ID, SNOW_STONE_ID, JUNGLE_STONE_ID,
     TOPAZ_ORE_ID, SAPPHIRE_ORE_ID, EMERALD_ORE_ID,
     COAL_ORE_ID, IRON_ORE_ID,
@@ -202,10 +202,11 @@ def test_biome_stone_and_gem_items_are_registered():
         ("jungle_stone_block", JUNGLE_STONE_ID),
     ):
         assert item_registry.get(item_id).places_tile_id == tile_id
-    for item_id, tile_id in (
-        ("topaz", TOPAZ_ORE_ID), ("sapphire", SAPPHIRE_ORE_ID), ("emerald", EMERALD_ORE_ID),
-    ):
-        assert item_registry.get(item_id).icon_tile_id == tile_id
+    # The three gems use a dedicated loose-ore-chunk icon from the
+    # user-supplied icon sheet (icon_key, see assets._SHEET_ICON_CELLS)
+    # rather than their own tile's texture -- see item_registry.py.
+    for item_id in ("topaz", "sapphire", "emerald"):
+        assert item_registry.get(item_id).icon_key == item_id
 
 
 # --- Desert vegetation: cacti instead of trees ---
@@ -217,7 +218,7 @@ def test_desert_has_no_trees():
             continue
         surface_y = world.surface_spawn_y(x) + 1
         for dy in range(1, 6):
-            assert world.get_tile(x, surface_y - dy) != TREE_TRUNK_ID
+            assert world.get_tile(x, surface_y - dy) != TREE_ID
 
 
 def test_desert_spawns_cacti():

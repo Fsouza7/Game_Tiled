@@ -9,17 +9,17 @@ from game.crafting import recipe_registry, crafting_system
 from game.items import item_registry
 from game.entities.player import Player
 from game.world.world import World
-from game.world.tile_registry import WORKBENCH_ID, TREE_TRUNK_ID, TREE_LEAVES_ID, AIR_ID
+from game.world import tile_registry
+from game.world.tile_registry import WORKBENCH_ID, TREE_ID, AIR_ID
 
 
-def _find_trunk_position(world: World):
+def _find_tree_position(world: World):
     for x in range(WORLD_WIDTH_TILES):
         surface_y = world.surface_spawn_y(x) + 1
-        for dy in range(1, 6):
-            y = surface_y - dy
-            if world.get_tile(x, y) == TREE_TRUNK_ID:
-                return x, y
-    raise AssertionError("no tree trunk ever spawned -- check TREE_SPAWN_CHANCE_PER_SLOT/seed")
+        y = surface_y - 1
+        if world.get_tile(x, y) == TREE_ID:
+            return x, y
+    raise AssertionError("no tree ever spawned -- check TREE_SPAWN_CHANCE_PER_SLOT/seed")
 
 
 def _find_clear_air_column(world: World, near_x: int, search_radius: int = 40) -> int:
@@ -79,28 +79,31 @@ def test_wood_pickaxe_remake_recipe_has_no_station():
 
 # --- tree / wood obtainability ---
 
-def test_tree_trunk_spawns_and_is_choppable():
+def test_tree_spawns_and_is_choppable():
     world = World(DEFAULT_SEED)
-    x, y = _find_trunk_position(world)
+    x, y = _find_tree_position(world)
 
     player = Player(x * TILE_SIZE, y * TILE_SIZE)
     drop = _mine_until_dropped(player, world, x, y)
     assert drop == "wood"
 
 
-def test_tree_has_a_canopy_next_to_the_trunk():
+def test_chopping_a_tree_fells_it_all_at_once():
+    # User-requested ("faça um sistema diferente pra cortar ela, pra ela
+    # cair de uma vez"): a tree is one tile now, not several stacked
+    # trunk/leaf tiles chopped one at a time -- one mining session should
+    # both fully clear it (no leftover tile) and grant a whole tree's worth
+    # of wood (break_quantity, see tile_registry.TREE_ID) in that single drop.
     world = World(DEFAULT_SEED)
-    x, y = _find_trunk_position(world)
-    # The trunk's top few rows should have leaves directly above, and at
-    # least one neighboring column should carry canopy too (a real 3-wide
-    # tree, not a single floating tile).
-    surface_y = world.surface_spawn_y(x) + 1
-    canopy_y = surface_y - 4
-    assert world.get_tile(x, canopy_y) == TREE_LEAVES_ID
-    assert (
-        world.get_tile(x - 1, canopy_y) == TREE_LEAVES_ID
-        or world.get_tile(x + 1, canopy_y) == TREE_LEAVES_ID
-    )
+    x, y = _find_tree_position(world)
+    tile_def = tile_registry.get(TREE_ID)
+
+    player = Player(x * TILE_SIZE, y * TILE_SIZE)
+    drop = _mine_until_dropped(player, world, x, y)
+
+    assert drop == "wood"
+    assert world.get_tile(x, y) == AIR_ID
+    assert tile_def.break_quantity > 1
 
 
 # --- crafting rules ---

@@ -27,11 +27,14 @@ def test_icon_tile_id_always_points_to_a_real_tile():
             tile_registry.get(item.places_tile_id)
 
 
-def test_ore_items_use_their_own_tile_texture_as_icon():
-    # Regression check for the "flat gray swatch" bug: ore items must not
-    # fall through to the generic category swatch.
-    assert item_registry.get("coal").icon_tile_id == tile_registry.COAL_ORE_ID
-    assert item_registry.get("iron_ore").icon_tile_id == tile_registry.IRON_ORE_ID
+def test_ore_items_never_fall_through_to_the_generic_category_swatch():
+    # Regression check for the "flat gray swatch" bug. Coal/Iron Ore now use
+    # a dedicated loose-ore-chunk icon from the user-supplied icon sheet
+    # (icon_key, see assets._SHEET_ICON_CELLS) rather than reusing their own
+    # tile's texture; Wood still borrows the Tree Trunk tile's texture since
+    # no sheet icon replaced it.
+    assert item_registry.get("coal").icon_key == "coal"
+    assert item_registry.get("iron_ore").icon_key == "iron_ore"
     assert item_registry.get("wood").icon_tile_id == tile_registry.TREE_TRUNK_ID
 
 

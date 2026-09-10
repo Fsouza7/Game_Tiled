@@ -251,11 +251,18 @@ def test_summon_climbs_over_a_wall_instead_of_getting_stuck_against_it():
     enemies = [enemy]
 
     start_x = summon.x
+    min_y = summon.y
     for _ in range(240):
         summon_ai.update(summon, world, player, enemies, dt=1 / 60)
+        min_y = min(min_y, summon.y)
 
     assert summon.x > start_x + TILE_SIZE * 2  # made real progress, not stuck at the wall
-    assert summon.y < air_y  # climbed above its start altitude to get over it
+    # Checks the *lowest y it ever reached*, not just where it is at frame
+    # 240: once past the wall it closes in on the stationary enemy (which
+    # sits back at air_y) and settles into a small orbit around it with no
+    # attack-range standoff of its own, so the final-frame y alone is a
+    # coin flip on which side of air_y that orbit happens to land on.
+    assert min_y < air_y - TILE_SIZE * 3  # climbed well above its start altitude to get over it
 
 
 def test_summon_hovers_near_player_with_no_enemies_around():

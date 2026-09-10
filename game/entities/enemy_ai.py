@@ -88,6 +88,15 @@ def _update_hop(enemy: Enemy, world: World, player, dt: float) -> None:
         else:
             enemy.x_vel = 0.0
 
+    if enemy.x_vel != 0:
+        # HOP AI only sets x_vel once, at launch, and never revisits it
+        # mid-air -- a 1-tile bump anywhere under the arc used to zero it
+        # outright (move_axis on contact) and strand the enemy right
+        # there, re-aiming at the same spot every following hop and
+        # looking like it was bouncing in place against an invisible
+        # wall. try_step_up climbs a genuine 1-tile ledge; a real wall is
+        # still left alone.
+        tile_collision.try_step_up(enemy, world, 1 if enemy.x_vel > 0 else -1)
     tile_collision.move_axis(enemy, world, enemy.x_vel, horizontal=True)
     landed = tile_collision.move_axis(enemy, world, enemy.y_vel, horizontal=False)
     if landed:

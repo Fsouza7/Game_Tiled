@@ -5,7 +5,7 @@ README "Controles") only touches this file.
 """
 import pygame
 
-from game.settings import TILE_SIZE, PLAYER_PLACE_COOLDOWN_S
+from game.settings import TILE_SIZE, PLAYER_PLACE_COOLDOWN_S, VOLUME_STEP, SLEEP_FADE_DURATION_S
 from game.items import item_registry
 from game.crafting import crafting_system
 from game.crafting.smelt_recipe import SmeltRecipeDef
@@ -26,7 +26,8 @@ from game.rendering.renderer import (
 )
 from game.inventory.inventory import transfer_stack
 from game.crafting.furnace_system import nearest_station_tile
-from game.world.tile_registry import PERSONAL_CHEST_ID, CHEST_ID
+from game.world.tile_registry import PERSONAL_CHEST_ID, CHEST_ID, DOOR_CLOSED_ID, DOOR_OPEN_ID, BED_ID
+from game.world import doors, beds, tile_registry
 from game.npcs.npc_spawner import nearest_in_range
 from game.npcs import shop as npc_shop
 from game.core import save_system
@@ -145,10 +146,18 @@ class InputHandler:
         if action is None:
             return
         if game_app.settings_open:
-            if action == "zoom_in":
+            if action == "zoom_up":
                 game_app.camera.zoom_in()
-            elif action == "zoom_out":
+            elif action == "zoom_down":
                 game_app.camera.zoom_out()
+            elif action == "music_up":
+                game_app.adjust_music_volume(VOLUME_STEP)
+            elif action == "music_down":
+                game_app.adjust_music_volume(-VOLUME_STEP)
+            elif action == "sfx_up":
+                game_app.adjust_sfx_volume(VOLUME_STEP)
+            elif action == "sfx_down":
+                game_app.adjust_sfx_volume(-VOLUME_STEP)
             elif action == "back":
                 game_app.settings_open = False
         else:
@@ -245,6 +254,31 @@ class InputHandler:
         )
         if loot_chest_pos is not None:
             self._open_chest_ui(game_app, open_chest_pos=loot_chest_pos)
+            return
+
+        door_pos = nearest_station_tile(
+            game_app.world, game_app.player.center_x, game_app.player.center_y, DOOR_CLOSED_ID,
+        ) or nearest_station_tile(
+            game_app.world, game_app.player.center_x, game_app.player.center_y, DOOR_OPEN_ID,
+        )
+        if door_pos is not None:
+            doors.toggle(game_app.world, *door_pos)
+            return
+
+        bed_pos = nearest_station_tile(
+            game_app.world, game_app.player.center_x, game_app.player.center_y, BED_ID,
+        )
+        if bed_pos is not None:
+            self._try_sleep(game_app, bed_pos)
+
+    def _try_sleep(self, game_app, bed_pos) -> None:
+        reason = beds.try_sleep(game_app.world, game_app.world_clock, *bed_pos)
+        if reason is not None:
+            game_app.notifications.push_throttled(reason)
+            return
+        game_app.notifications.push("Slept through the night")
+        game_app.sleep_fade_remaining_s = SLEEP_FADE_DURATION_S
+        sfx.play("sleep")
 
     def _open_chest_ui(self, game_app, open_chest_pos) -> None:
         """open_chest_pos is None for the player's own Personal Chest
@@ -412,6 +446,24 @@ class InputHandler:
             self._handle_talk(game_app)
         elif key == pygame.K_F3:
             game_app.debug_overlay.toggle()
+        elif key == pygame.K_F4:
+            game_app.debug_mode = not game_app.debug_mode
+            game_app.notifications.push("Debug mode " + ("ON" if game_app.debug_mode else "OFF"))
+        elif key == pygame.K_F5 and game_app.debug_mode:
+            game_app.debug_unlock_all_recipes()
+        elif key == pygame.K_F6 and game_app.debug_mode:
+            game_app.debug_reveal_map()
+        elif key == pygame.K_F7 and game_app.debug_mode:
+            game_app.debug_restock()
+        elif key == pygame.K_F8 and game_app.debug_mode:
+            game_app.debug_spawn_all_bosses()
+        elif key == pygame.K_F9 and game_app.debug_mode:
+            game_app.debug_spawn_all_enemies()
+        elif key == pygame.K_F10 and game_app.debug_mode:
+            world_x, world_y = game_app.camera.screen_to_world(*pygame.mouse.get_pos())
+            game_app.debug_teleport_to(world_x, world_y)
+        elif key == pygame.K_F11 and game_app.debug_mode:
+            game_app.debug_teleport_to_spawn()
         elif key == pygame.K_SPACE:
             game_app.player.jump()
         elif key == pygame.K_f:
@@ -463,9 +515,15 @@ class InputHandler:
             blocked_reason = player.blocked_mining_reason(game_app.world, tile_x, tile_y)
             if blocked_reason is not None:
                 game_app.notifications.push_throttled(blocked_reason)
+            broken_tile_id = game_app.world.get_tile(tile_x, tile_y)
             drop_item_id = player.try_mine(game_app.world, tile_x, tile_y, dt)
             if drop_item_id is not None:
-                quantity = player.mining_drop_quantity()
+                # break_quantity is normally 1 (every ordinary tile); a Tree
+                # sets it higher since one break now fells the whole tree at
+                # once (see tile.py) instead of chipping through several
+                # stacked trunk/leaf tiles that each dropped separately.
+                break_quantity = tile_registry.get(broken_tile_id).break_quantity
+                quantity = break_quantity + (player.mining_drop_quantity() - 1)
                 newly_discovered = crafting_system.collect_and_discover(player, drop_item_id, quantity)
                 for unlocked in newly_discovered:
                     game_app.notifications.push(f"New recipe unlocked: {unlocked.name}")

@@ -8,7 +8,7 @@ import random
 import pygame  # noqa: F401
 
 from game.settings import (
-    DEFAULT_SEED, WORLD_WIDTH_TILES, TILE_SIZE, ENEMY_MAX_ALIVE,
+    DEFAULT_SEED, WORLD_WIDTH_TILES, TILE_SIZE, ENEMY_MAX_ALIVE_DAY,
     PLAYER_HIT_INVULNERABILITY_S, CHUNK_WIDTH,
 )
 from game.entities import tile_collision
@@ -623,7 +623,7 @@ def test_spawner_respects_max_alive_cap():
         spawner.time_until_next_spawn = 0.0  # force an attempt every tick
         spawner.update(dt=0.0, world=world, player=player, enemies=enemies, is_night=False)
         enemies = [e for e in enemies if e.alive]
-        assert len(enemies) <= ENEMY_MAX_ALIVE
+        assert len(enemies) <= ENEMY_MAX_ALIVE_DAY
 
 
 def test_flying_enemies_spawn_above_the_ground():

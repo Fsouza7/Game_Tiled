@@ -1,21 +1,42 @@
 """Loads and slices the real art in assets/ (must run after pygame.display
 is initialized, since convert_alpha() needs a display surface).
 
-Only three tile materials exist as dedicated art in assets/Terrain/Terrain.png
-(grass, dirt, a light stone brick). Tiles with no matching material (ore,
-bedrock, workbench, tree trunk/planks) reuse the closest base sprite with a
-color tint plus a small procedural detail (speckles, plank/bark lines) drawn
-on top so they read as a distinct material rather than a flat color wash.
-This is documented here and in README.md rather than pretended away.
+Grass/dirt (assets/Tiles/Tileset Outside.png) and stone (Tileset Inside.png)
+are the only tile materials with dedicated art -- one representative 32px
+cell each, not the full neighbor-aware autotiling both sheets have the
+pieces for. Tiles with no matching material of their own (ore, bedrock,
+workbench, tree trunk/planks) reuse the closest of those three base
+sprites with a color tint plus a small procedural detail (speckles,
+plank/bark lines) drawn on top so they read as a distinct material rather
+than a flat color wash. This is documented here and in README.md rather
+than pretended away.
 
-Item icons follow the same idea: a block/ore icon reuses its tile texture
-(see ItemDef.places_tile_id / icon_tile_id); a few items with no matching
-tile or sprite (the pickaxes, sword, cap) get a small hand-drawn vector icon
-instead of an anonymous color swatch -- see `_build_procedural_icons`.
+Item icons follow the same idea: a block icon reuses its tile texture (see
+ItemDef.places_tile_id / icon_tile_id); the one item with no matching
+tile/sprite and no entry in the user-supplied icon sheet below (the arrow)
+gets a small hand-drawn vector icon instead of an anonymous color swatch --
+see `_build_procedural_icons`.
 
 Spikes and Trampoline reuse dedicated art from assets/Traps/ directly (real,
 single-frame source images, no tint/detail pass needed); the fruit
 consumables reuse assets/Items/Fruits/ the same way Apple already did.
+
+The background is a user-supplied 4-layer parallax pack
+(BACKGROUND_LAYER_PATHS, assets/Backgrounds/) instead of a flat tiled
+color; trees (TREE_ID) render as a real sprite from assets/Tiles/Trees.png
+instead of stacked tile blocks -- see README "How the parallax background
+works" / "How trees work" for both.
+
+A user-supplied 512x867 icon sheet (assets/Items/#2 - Transparent Icons &
+Drop Shadow.png, a 16-column x 32px-cell grid of ~350 hand-drawn fantasy
+RPG icons) covers most other items -- see `_SHEET_ICON_CELLS` for direct
+single-icon matches (Wood Sword, ores, boss items, ...), and
+`_PICKAXE_BASE_CELL`/`_INGOT_BASE_CELL`/`_ARMOR_BASE_CELLS`/`_CROWN_BASE_CELL`
+for real sheet shapes recolored per tier with `_colorize` (pickaxes, bars,
+armor sets, the Crown of the Slime King) instead of vector-drawn tiers.
+Sliced by `_load_sheet_item_icons` and layered on top of the procedural
+icons in `load_static_item_icons`, so a sheet icon always wins over a
+vector one for the same key.
 """
 import os
 import random
@@ -37,14 +58,31 @@ from game.world.tile_registry import (
 from game.entities import character_registry
 from game.world import hazard_feature
 
-TERRAIN_PATH = os.path.join("assets", "Terrain", "Terrain.png")
+# TERRAIN_CELL (16px) is still used below for the handful of tiles built
+# from scratch as blank canvases (torch/cactus/bush) -- unrelated to the
+# tilesets below, which are native 32px and used as-is.
 TERRAIN_CELL = 16
 
-# (column, row) of the chosen 16x16 cell in Terrain.png for each material.
-_TERRAIN_CELLS = {
-    GRASS_ID: (7, 0),
-    DIRT_ID: (7, 1),
-    STONE_ID: (13, 5),
+# User-supplied dedicated tilesets (32px cells, an (row, col) grid) --
+# replaced the single mixed-theme Terrain.png this project started with,
+# which only had a grass/dirt/stone cell usable for this game anyway (see
+# README "Art reuse"). Outside covers the surface (grass-topped dirt,
+# plain dirt); Inside covers underground stone.
+TILESET_OUTSIDE_PATH = os.path.join("assets", "Tiles", "Tileset Outside.png")
+TILESET_INSIDE_PATH = os.path.join("assets", "Tiles", "Tileset Inside.png")
+TILESET_CELL = 32
+
+# (row, col) of the chosen 32x32 cell for each material -- a single
+# representative cell per tile id, the same "one fixed texture regardless
+# of neighbors" approach the old Terrain.png cells used (not a full
+# neighbor-aware autotile system, even though both sheets include the
+# pieces for one).
+_OUTSIDE_TILESET_CELLS = {
+    GRASS_ID: (0, 4),
+    DIRT_ID: (1, 4),
+}
+_INSIDE_TILESET_CELLS = {
+    STONE_ID: (1, 5),
 }
 
 PLAYER_CHARACTER_DIR = os.path.join("assets", "MainCharacters", "NinjaFrog")
@@ -57,7 +95,18 @@ PLAYER_ANIMATIONS = {
     "double_jump": "double_jump.png",
 }
 
-BACKGROUND_PATH = os.path.join("assets", "Background", "Blue.png")
+# Layered parallax background (user-supplied), back to front. Each PNG is
+# a full 320x320 tile: Sky is opaque and covers the whole canvas; the other
+# three have a transparent top half and an opaque silhouette (clouds /
+# distant rock peaks / nearer grassy peaks) along the bottom, meant to be
+# stacked and each scrolled at its own speed for a depth effect -- see
+# Renderer._draw_background and settings.BACKGROUND_LAYER_PARALLAX.
+BACKGROUND_LAYER_PATHS = {
+    "sky": os.path.join("assets", "Backgrounds", "Sky.png"),
+    "clouds": os.path.join("assets", "Backgrounds", "Clouds.png"),
+    "rock_mountains": os.path.join("assets", "Backgrounds", "Rock Mountains.png"),
+    "grass_mountains": os.path.join("assets", "Backgrounds", "Grass Mountains.png"),
+}
 
 CRATE_TEXTURE_PATH = os.path.join("assets", "Items", "Boxes", "Box1", "Idle.png")
 CHEST_TEXTURE_PATH = os.path.join("assets", "Items", "Boxes", "Box2", "Idle.png")
@@ -131,6 +180,112 @@ _UI_BUTTON_FILES = {
 
 _FRUITS_DIR = os.path.join("assets", "Items", "Fruits")
 
+# A user-supplied 16x27 grid of hand-drawn item icons (32px cells, see
+# assets/Items/#2 - Transparent Icons & Drop Shadow.png), (row, col). Keyed
+# by the same icon_key/item_id used elsewhere, so `load_static_item_icons`
+# can just overlay these on top of the procedural ones -- real art wins
+# where both exist for the same key.
+ITEM_ICON_SHEET_PATH = os.path.join("assets", "Items", "#2 - Transparent Icons & Drop Shadow.png")
+ITEM_ICON_SHEET_CELL = 32
+
+# Items with one unambiguous single-icon match -- cropped as-is, no tinting.
+_SHEET_ICON_CELLS = {
+    "wood_sword": (5, 0),
+    "wood_bow": (6, 3),
+    "grapple_hook": (16, 0),  # a bent fishing hook, from the sheet's fishing-tackle row
+    "slime_gel": (0, 1),
+    "feather": (17, 10),
+    "coin": (12, 7),
+    # Ores previously borrowed their own tile's texture as a placeholder
+    # icon (see item_registry.py) -- these loose-ore-chunk icons read more
+    # like something you'd actually carry than a reused block texture.
+    "coal": (20, 2),
+    "iron_ore": (20, 12),
+    "topaz": (20, 8),
+    "sapphire": (20, 6),
+    "emerald": (20, 7),
+    # Boss items previously had no icon at all (flat category swatch).
+    "slime_core_idol": (18, 2),   # glowing green orb -- a summoning totem
+    "slime_king_core": (17, 4),   # a rare-looking gem, distinct from the ore gems above
+    # Already the right natural color as-is (a plain wood-brown rod).
+    "summon_rod_wood": (6, 7),
+}
+
+# Same real shape, recolored -- these don't fit _TIER_COLORS's wood/iron/
+# steel/arcane naming (only one non-wood tier each), so handled directly
+# rather than folded into the loops below.
+_SUMMON_ROD_IRON_CELL = (6, 7)          # same plain rod as summon_rod_wood, tinted iron-gray
+_ARCANE_STAFF_CELL = (6, 8)             # a gemmed wand, tinted arcane purple
+
+# Equipment/tool/bar sets where the sheet only has *one* shape per slot, but
+# the game needs several tinted tiers of it -- recolored per tier with
+# _colorize instead of getting a flat vector fill (_build_procedural_icons
+# used to draw all of these; removed there once covered here).
+_TIER_COLORS = {
+    "wood": (150, 110, 65),
+    "stone": (150, 150, 158),
+    "iron": (170, 170, 178),
+    "steel": (120, 130, 145),
+    "arcane": (150, 100, 210),
+}
+_PICKAXE_BASE_CELL = (10, 2)
+_PICKAXE_TIERS = ("wood", "stone", "iron", "steel", "arcane")  # -> "<tier>_pickaxe"
+
+_INGOT_BASE_CELL = (17, 3)
+_BAR_COLORS = {
+    "iron_bar": (170, 170, 178),
+    "steel_bar": (120, 130, 145),
+    "topaz_bar": (210, 170, 60),
+    "sapphire_bar": (60, 100, 200),
+    "emerald_bar": (50, 160, 95),
+    "arcane_bar": (140, 90, 210),
+}
+
+# slot suffix -> base cell; combined with tier as f"{tier}_{slot}" (matches
+# item_registry.py's naming, e.g. "wood_helmet"/"iron_armor"). Arcane only
+# has a helmet (the Crown of the Slime King is head-slot too, but gets its
+# own distinct base/tint below rather than reusing this helmet shape).
+_ARMOR_BASE_CELLS = {
+    "helmet": (7, 4),
+    "armor": (7, 7),
+    "greaves": (7, 10),
+    "boots": (8, 3),
+}
+_ARMOR_TIERS = ("wood", "iron", "steel")  # arcane_helmet handled separately below
+
+_CROWN_BASE_CELL = (7, 3)  # a paladin-style helm, recolored gold/red for royalty
+_CROWN_COLOR = (225, 180, 70)
+
+
+def _load_sheet_item_icons() -> Dict[str, pygame.Surface]:
+    sheet = pygame.image.load(ITEM_ICON_SHEET_PATH).convert_alpha()
+    cell = ITEM_ICON_SHEET_CELL
+
+    def crop_cell(row: int, col: int) -> pygame.Surface:
+        return _crop(sheet, col * cell, row * cell, cell, cell)
+
+    icons = {key: crop_cell(row, col) for key, (row, col) in _SHEET_ICON_CELLS.items()}
+
+    pickaxe_base = crop_cell(*_PICKAXE_BASE_CELL)
+    for tier in _PICKAXE_TIERS:
+        icons[f"{tier}_pickaxe"] = _colorize(pickaxe_base, _TIER_COLORS[tier])
+
+    ingot_base = crop_cell(*_INGOT_BASE_CELL)
+    for item_id, color in _BAR_COLORS.items():
+        icons[item_id] = _colorize(ingot_base, color)
+
+    for slot, base_cell in _ARMOR_BASE_CELLS.items():
+        base = crop_cell(*base_cell)
+        for tier in _ARMOR_TIERS:
+            icons[f"{tier}_{slot}"] = _colorize(base, _TIER_COLORS[tier])
+    icons["arcane_helmet"] = _colorize(crop_cell(*_ARMOR_BASE_CELLS["helmet"]), _TIER_COLORS["arcane"])
+
+    icons["slime_king_crown"] = _colorize(crop_cell(*_CROWN_BASE_CELL), _CROWN_COLOR)
+    icons["summon_rod_iron"] = _colorize(crop_cell(*_SUMMON_ROD_IRON_CELL), _TIER_COLORS["iron"])
+    icons["arcane_staff"] = _colorize(crop_cell(*_ARCANE_STAFF_CELL), _TIER_COLORS["arcane"])
+
+    return icons
+
 # Static, non-tile item icons: item_id -> (path, frame_size). frame_size is
 # the width of a single frame when the source file is an animation strip;
 # only the first frame is used since inventory icons don't animate.
@@ -157,6 +312,29 @@ def _tinted(base: pygame.Surface, color: Tuple[int, int, int], alpha: int) -> py
     overlay = pygame.Surface(base.get_size(), pygame.SRCALPHA)
     overlay.fill((*color, alpha))
     result.blit(overlay, (0, 0))
+    return result
+
+
+def _colorize(base: pygame.Surface, color: Tuple[int, int, int]) -> pygame.Surface:
+    """Recolors a sprite by its own per-pixel luminosity (grayscale
+    brightness) rather than `_tinted`'s flat alpha wash -- shifts the whole
+    icon to `color` while keeping its real shading/highlights, so one real
+    sheet icon shape (see _SHEET_TIER_BASE_CELLS) can stand in for several
+    tinted tiers the same way `_build_procedural_icons`'s flat-fill
+    silhouettes used to, but with real pixel-art linework instead of a
+    vector shape. Pure pygame (get_at/set_at) rather than numpy, since
+    numpy isn't a declared project dependency (see requirements.txt) --
+    fine at icon-load time, a handful of 32x32 sprites."""
+    w, h = base.get_size()
+    result = pygame.Surface((w, h), pygame.SRCALPHA)
+    cr, cg, cb = color
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = base.get_at((x, y))
+            if a == 0:
+                continue
+            luminosity = min(1.0, (0.299 * r + 0.587 * g + 0.114 * b) / 255.0 * 1.15)
+            result.set_at((x, y), (int(cr * luminosity), int(cg * luminosity), int(cb * luminosity), a))
     return result
 
 
@@ -190,11 +368,16 @@ def _with_vertical_lines(base: pygame.Surface, color, xs, width: int = 1) -> pyg
 
 
 def load_tile_textures() -> Dict[int, pygame.Surface]:
-    sheet = pygame.image.load(TERRAIN_PATH).convert_alpha()
+    outside_sheet = pygame.image.load(TILESET_OUTSIDE_PATH).convert_alpha()
+    inside_sheet = pygame.image.load(TILESET_INSIDE_PATH).convert_alpha()
     raw_by_id = {
-        tile_id: _crop(sheet, col * TERRAIN_CELL, row * TERRAIN_CELL, TERRAIN_CELL, TERRAIN_CELL)
-        for tile_id, (col, row) in _TERRAIN_CELLS.items()
+        tile_id: _crop(outside_sheet, col * TILESET_CELL, row * TILESET_CELL, TILESET_CELL, TILESET_CELL)
+        for tile_id, (row, col) in _OUTSIDE_TILESET_CELLS.items()
     }
+    raw_by_id.update({
+        tile_id: _crop(inside_sheet, col * TILESET_CELL, row * TILESET_CELL, TILESET_CELL, TILESET_CELL)
+        for tile_id, (row, col) in _INSIDE_TILESET_CELLS.items()
+    })
     stone_raw = raw_by_id[STONE_ID]
     dirt_raw = raw_by_id[DIRT_ID]
     grass_raw = raw_by_id[GRASS_ID]
@@ -217,25 +400,27 @@ def load_tile_textures() -> Dict[int, pygame.Surface]:
 
     # Workbench: tinted dirt + a lighter "tabletop" band and darker leg
     # lines, so the tile silhouette reads as furniture, not a plain block.
+    # Coordinates are doubled from their original values (was tuned against
+    # a 16px raw tile; dirt_raw is now the tileset's native 32px).
     bench_base = _tinted(dirt_raw, (120, 80, 45), 200)
-    bench_base = _with_horizontal_lines(bench_base, (170, 130, 80), [3], width=2)
-    bench_base = _with_vertical_lines(bench_base, (70, 45, 25), [2, 13], width=2)
+    bench_base = _with_horizontal_lines(bench_base, (170, 130, 80), [6], width=2)
+    bench_base = _with_vertical_lines(bench_base, (70, 45, 25), [4, 26], width=2)
     textures[WORKBENCH_ID] = pygame.transform.scale(bench_base, (TILE_SIZE, TILE_SIZE))
 
-    # Tree trunk: tinted dirt + vertical bark-grain lines.
+    # Tree trunk/leaves: legacy textures (see tile_registry.py -- these two
+    # tile ids are no longer generated, kept only so an old save's leftover
+    # tile still renders instead of falling back to a flat swatch).
     trunk_base = _tinted(dirt_raw, (90, 55, 25), 190)
-    trunk_base = _with_vertical_lines(trunk_base, (60, 35, 15), [4, 8, 12])
+    trunk_base = _with_vertical_lines(trunk_base, (60, 35, 15), [8, 16, 24])
     textures[TREE_TRUNK_ID] = pygame.transform.scale(trunk_base, (TILE_SIZE, TILE_SIZE))
 
-    # Tree leaves: the grass sprite's foliage reused directly (real art,
-    # just repurposed) with a slightly darker/denser tint for canopy.
     leaves_base = _tinted(grass_raw, (30, 60, 20), 90)
     textures[TREE_LEAVES_ID] = pygame.transform.scale(leaves_base, (TILE_SIZE, TILE_SIZE))
 
     # Wood plank: lighter, cleaner tint than raw bark + a single seam line
     # per plank -- reads as "cut lumber" rather than a tree trunk.
     plank_base = _tinted(dirt_raw, (150, 110, 65), 200)
-    plank_base = _with_horizontal_lines(plank_base, (110, 75, 40), [8])
+    plank_base = _with_horizontal_lines(plank_base, (110, 75, 40), [16])
     textures[WOOD_PLANK_ID] = pygame.transform.scale(plank_base, (TILE_SIZE, TILE_SIZE))
 
     crate_sheet = pygame.image.load(CRATE_TEXTURE_PATH).convert_alpha()
@@ -367,11 +552,12 @@ def load_tile_textures() -> Dict[int, pygame.Surface]:
     # Furnace: tinted stone (like the Workbench's tinted dirt) + a dark
     # "mouth" opening and a warm ember glow -- no dedicated furnace art in
     # the pack, so this is the same tint-plus-detail technique as every
-    # other structural tile with no single-cell source (see module docstring).
+    # other structural tile with no single-cell source (see module
+    # docstring). Coordinates doubled, same reason as the Workbench above.
     furnace_base = _tinted(stone_raw, (70, 65, 70), 205)
-    pygame.draw.rect(furnace_base, (30, 26, 28), pygame.Rect(4, 9, 8, 6))
-    pygame.draw.rect(furnace_base, (235, 130, 40), pygame.Rect(5, 11, 6, 3))
-    furnace_base = _with_horizontal_lines(furnace_base, (40, 36, 40), [2], width=1)
+    pygame.draw.rect(furnace_base, (30, 26, 28), pygame.Rect(8, 18, 16, 12))
+    pygame.draw.rect(furnace_base, (235, 130, 40), pygame.Rect(10, 22, 12, 6))
+    furnace_base = _with_horizontal_lines(furnace_base, (40, 36, 40), [4], width=1)
     textures[FURNACE_ID] = pygame.transform.scale(furnace_base, (TILE_SIZE, TILE_SIZE))
 
     return textures
@@ -467,91 +653,14 @@ def load_ui_theme() -> Dict[str, object]:
 
 
 def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
-    """Small hand-drawn vector icons for items that have neither a matching
-    tile nor sprite art in assets/ (no tool/weapon/armor icons exist in the
-    pack). Simple shapes beat an anonymous color swatch."""
+    """A hand-drawn vector icon for the one item with neither a matching
+    tile/sprite nor a usable match in the user-supplied icon sheet (see
+    ITEM_ICON_SHEET_PATH above) -- a simple shape beats an anonymous color
+    swatch."""
     icons: Dict[str, pygame.Surface] = {}
 
     def new_surface():
         return pygame.Surface((size, size), pygame.SRCALPHA)
-
-    # Pickaxes: a handle plus a curved head; color varies by tier.
-    for item_id, head_color, handle_color in (
-        ("wood_pickaxe", (150, 110, 65), (100, 70, 40)),
-        ("stone_pickaxe", (150, 150, 158), (100, 70, 40)),
-        ("iron_pickaxe", (190, 190, 198), (100, 70, 40)),
-        ("steel_pickaxe", (150, 160, 175), (100, 70, 40)),
-        ("arcane_pickaxe", (170, 120, 230), (90, 70, 130)),
-    ):
-        surf = new_surface()
-        pygame.draw.line(surf, handle_color, (size * 0.25, size * 0.85), (size * 0.75, size * 0.2), width=4)
-        pygame.draw.arc(
-            surf, head_color,
-            pygame.Rect(size * 0.35, size * 0.05, size * 0.55, size * 0.55),
-            start_angle=3.6, stop_angle=6.0, width=6,
-        )
-        icons[item_id] = surf
-
-    # Sword: a blade with a crossguard and grip.
-    surf = new_surface()
-    pygame.draw.line(surf, (190, 190, 200), (size * 0.5, size * 0.1), (size * 0.5, size * 0.65), width=5)
-    pygame.draw.line(surf, (120, 90, 50), (size * 0.3, size * 0.65), (size * 0.7, size * 0.65), width=4)
-    pygame.draw.line(surf, (90, 65, 35), (size * 0.5, size * 0.65), (size * 0.5, size * 0.9), width=4)
-    icons["wood_sword"] = surf
-
-    # Armor sets: same silhouette per slot, tinted by tier. No dedicated
-    # armor art exists in the pack.
-    def draw_armor_set(prefix, color, dark):
-        surf = new_surface()
-        pygame.draw.arc(
-            surf, color,
-            pygame.Rect(size * 0.15, size * 0.25, size * 0.7, size * 0.6),
-            start_angle=3.14159, stop_angle=6.28318, width=7,
-        )
-        pygame.draw.line(surf, color, (size * 0.15, size * 0.55), (size * 0.85, size * 0.55), width=5)
-        icons[f"{prefix}_helmet"] = surf
-
-        surf = new_surface()
-        pygame.draw.polygon(surf, color, [
-            (size * 0.5, size * 0.12), (size * 0.82, size * 0.28), (size * 0.72, size * 0.9),
-            (size * 0.28, size * 0.9), (size * 0.18, size * 0.28),
-        ])
-        pygame.draw.circle(surf, dark, (int(size * 0.28), int(size * 0.3)), int(size * 0.08))
-        pygame.draw.circle(surf, dark, (int(size * 0.72), int(size * 0.3)), int(size * 0.08))
-        pygame.draw.line(surf, dark, (size * 0.5, size * 0.2), (size * 0.5, size * 0.85), width=2)
-        icons[f"{prefix}_armor"] = surf
-
-        surf = new_surface()
-        pygame.draw.rect(surf, color, pygame.Rect(size * 0.18, size * 0.15, size * 0.26, size * 0.7), border_radius=3)
-        pygame.draw.rect(surf, color, pygame.Rect(size * 0.56, size * 0.15, size * 0.26, size * 0.7), border_radius=3)
-        pygame.draw.line(surf, dark, (size * 0.31, size * 0.2), (size * 0.31, size * 0.8), width=2)
-        pygame.draw.line(surf, dark, (size * 0.69, size * 0.2), (size * 0.69, size * 0.8), width=2)
-        icons[f"{prefix}_greaves"] = surf
-
-        surf = new_surface()
-        pygame.draw.rect(surf, color, pygame.Rect(size * 0.12, size * 0.4, size * 0.3, size * 0.4), border_radius=2)
-        pygame.draw.rect(surf, color, pygame.Rect(size * 0.58, size * 0.4, size * 0.3, size * 0.4), border_radius=2)
-        pygame.draw.rect(surf, dark, pygame.Rect(size * 0.12, size * 0.72, size * 0.38, size * 0.12), border_radius=2)
-        pygame.draw.rect(surf, dark, pygame.Rect(size * 0.58, size * 0.72, size * 0.38, size * 0.12), border_radius=2)
-        icons[f"{prefix}_boots"] = surf
-
-    for prefix, color, dark in (
-        ("wood", (150, 110, 65), (100, 70, 40)),
-        ("iron", (170, 170, 178), (110, 110, 120)),
-        ("steel", (120, 130, 145), (70, 80, 95)),
-        ("arcane", (150, 100, 210), (90, 50, 150)),
-    ):
-        draw_armor_set(prefix, color, dark)
-
-    # Bow: a curved limb plus a taut string.
-    surf = new_surface()
-    pygame.draw.arc(
-        surf, (140, 95, 55),
-        pygame.Rect(size * 0.2, size * 0.05, size * 0.6, size * 0.9),
-        start_angle=-1.3, stop_angle=1.3, width=5,
-    )
-    pygame.draw.line(surf, (220, 220, 220), (size * 0.62, size * 0.12), (size * 0.62, size * 0.88), width=2)
-    icons["wood_bow"] = surf
 
     # Arrow: a shaft with a triangular head and fletching.
     surf = new_surface()
@@ -563,80 +672,6 @@ def _build_procedural_icons(size: int = 32) -> Dict[str, pygame.Surface]:
     pygame.draw.line(surf, (200, 60, 60), (size * 0.15, size * 0.85), (size * 0.35, size * 0.8), width=3)
     icons["arrow"] = surf
 
-    # Slime gel: a small green droplet with a highlight.
-    surf = new_surface()
-    pygame.draw.ellipse(surf, (100, 210, 120), pygame.Rect(size * 0.2, size * 0.3, size * 0.6, size * 0.55))
-    pygame.draw.polygon(surf, (100, 210, 120), [
-        (size * 0.5, size * 0.1), (size * 0.35, size * 0.4), (size * 0.65, size * 0.4),
-    ])
-    pygame.draw.ellipse(surf, (200, 250, 210), pygame.Rect(size * 0.3, size * 0.4, size * 0.15, size * 0.12))
-    icons["slime_gel"] = surf
-
-    # Feather: an elongated leaf shape with a center quill line.
-    surf = new_surface()
-    pygame.draw.ellipse(surf, (225, 225, 235), pygame.Rect(size * 0.35, size * 0.1, size * 0.3, size * 0.75))
-    pygame.draw.line(surf, (150, 90, 170), (size * 0.5, size * 0.15), (size * 0.5, size * 0.85), width=2)
-    icons["feather"] = surf
-
-    # Bars (furnace output): a classic trapezoid ingot silhouette, one color
-    # per metal, with a lighter highlight band so it doesn't read as a flat
-    # swatch. No dedicated bar/ingot art exists in the pack.
-    for item_id, base_color, highlight_color in (
-        ("iron_bar", (170, 170, 178), (215, 215, 222)),
-        ("steel_bar", (120, 130, 145), (175, 185, 200)),
-        ("topaz_bar", (210, 170, 60), (240, 205, 110)),
-        ("sapphire_bar", (60, 100, 200), (110, 150, 235)),
-        ("emerald_bar", (50, 160, 95), (100, 210, 140)),
-        ("arcane_bar", (140, 90, 210), (200, 160, 255)),
-    ):
-        surf = new_surface()
-        pygame.draw.polygon(surf, base_color, [
-            (size * 0.2, size * 0.68), (size * 0.32, size * 0.32), (size * 0.68, size * 0.32), (size * 0.8, size * 0.68),
-        ])
-        pygame.draw.line(surf, highlight_color, (size * 0.34, size * 0.4), (size * 0.66, size * 0.4), width=2)
-        pygame.draw.polygon(surf, (0, 0, 0), [
-            (size * 0.2, size * 0.68), (size * 0.32, size * 0.32), (size * 0.68, size * 0.32), (size * 0.8, size * 0.68),
-        ], width=1)
-        icons[item_id] = surf
-
-    # Summon rods: a shaft with a small glowing orb tip, color varies by
-    # tier -- no dedicated art exists for these (Summoner class).
-    for item_id, shaft_color, orb_color in (
-        ("summon_rod_wood", (120, 90, 50), (140, 210, 120)),
-        ("summon_rod_iron", (150, 150, 158), (180, 180, 190)),
-    ):
-        surf = new_surface()
-        pygame.draw.line(surf, shaft_color, (size * 0.25, size * 0.9), (size * 0.65, size * 0.3), width=4)
-        pygame.draw.circle(surf, orb_color, (int(size * 0.68), int(size * 0.22)), int(size * 0.16))
-        pygame.draw.circle(surf, (250, 250, 245), (int(size * 0.63), int(size * 0.17)), int(size * 0.05))
-        icons[item_id] = surf
-
-    # Arcane Staff: shaft plus a faceted gem tip -- no dedicated art exists.
-    surf = new_surface()
-    pygame.draw.line(surf, (90, 70, 130), (size * 0.28, size * 0.9), (size * 0.62, size * 0.32), width=4)
-    pygame.draw.polygon(surf, (170, 120, 230), [
-        (size * 0.62, size * 0.08), (size * 0.78, size * 0.28), (size * 0.62, size * 0.42), (size * 0.46, size * 0.28),
-    ])
-    pygame.draw.circle(surf, (230, 200, 255), (int(size * 0.58), int(size * 0.22)), int(size * 0.05))
-    icons["arcane_staff"] = surf
-
-    # Grapple Hook: a taut rope line with a curved metal hook at the tip.
-    surf = new_surface()
-    pygame.draw.line(surf, (150, 110, 60), (size * 0.2, size * 0.9), (size * 0.65, size * 0.35), width=3)
-    pygame.draw.arc(
-        surf, (190, 190, 198),
-        pygame.Rect(size * 0.5, size * 0.08, size * 0.4, size * 0.4),
-        start_angle=0.6, stop_angle=4.4, width=5,
-    )
-    icons["grapple_hook"] = surf
-
-    # Coin: a gold disc with a lighter rim -- no coin art exists in the pack.
-    surf = new_surface()
-    pygame.draw.circle(surf, (210, 165, 40), (size // 2, size // 2), int(size * 0.38))
-    pygame.draw.circle(surf, (240, 210, 90), (size // 2, size // 2), int(size * 0.38), width=2)
-    pygame.draw.circle(surf, (250, 230, 140), (int(size * 0.42), int(size * 0.4)), int(size * 0.08))
-    icons["coin"] = surf
-
     return icons
 
 
@@ -647,6 +682,7 @@ def load_static_item_icons() -> Dict[str, pygame.Surface]:
         frame = _crop(sheet, 0, 0, frame_size, min(frame_size, sheet.get_height()))
         icons[item_id] = frame
     icons.update(_build_procedural_icons())
+    icons.update(_load_sheet_item_icons())
     return icons
 
 
@@ -680,8 +716,22 @@ def load_all_character_animations(target_size: int) -> Dict[str, Dict[Tuple[str,
     }
 
 
-def load_background_tile() -> pygame.Surface:
-    return pygame.image.load(BACKGROUND_PATH).convert_alpha()
+def load_background_layers() -> Dict[str, pygame.Surface]:
+    return {name: pygame.image.load(path).convert_alpha() for name, path in BACKGROUND_LAYER_PATHS.items()}
+
+
+TREE_SPRITE_SHEET_PATH = os.path.join("assets", "Tiles", "Trees.png")
+TREE_SPRITE_WIDTH = 64   # 2 tiles
+TREE_SPRITE_HEIGHT = 96  # 3 tiles
+
+
+def load_tree_sprites() -> List[pygame.Surface]:
+    """The two full-tree sprites TREE_ID renders as (see Renderer._draw_world's
+    TREE_ID special case) -- a 128x96 sheet, two 64x96 trees side by side,
+    no gap between them."""
+    sheet = pygame.image.load(TREE_SPRITE_SHEET_PATH).convert_alpha()
+    count = sheet.get_width() // TREE_SPRITE_WIDTH
+    return [_crop(sheet, i * TREE_SPRITE_WIDTH, 0, TREE_SPRITE_WIDTH, TREE_SPRITE_HEIGHT) for i in range(count)]
 
 
 def _horizontal_strip(path: str, frame_w: int, frame_h: int = None) -> List[pygame.Surface]:

@@ -15,7 +15,7 @@ import math
 from game.settings import (
     TILE_SIZE, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES,
     WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, HOTBAR_SLOTS,
-    PLAYER_ANIMATION_FRAME_DELAY, BACKGROUND_PARALLAX,
+    PLAYER_ANIMATION_FRAME_DELAY, BACKGROUND_LAYER_PARALLAX,
     MELEE_REACH_TILES, MELEE_ARC_DEGREES, MELEE_SWING_VISUAL_DURATION_S,
     LIGHT_SEARCH_MARGIN_TILES, MAX_DARKNESS_ALPHA,
     TORCH_FLICKER_AMPLITUDE, TORCH_FLICKER_SPEED,
@@ -23,7 +23,7 @@ from game.settings import (
     MAP_CELL_SIZE_TILES, STRUCTURE_SLOT_WIDTH_TILES,
 )
 from game.world import tile_registry, lighting, hazard_feature, structures
-from game.world.tile_registry import AIR_ID, CRUMBLE_PLATFORM_ID, CHECKPOINT_ID, PERSONAL_CHEST_ID, CHEST_ID
+from game.world.tile_registry import AIR_ID, CRUMBLE_PLATFORM_ID, CHECKPOINT_ID, PERSONAL_CHEST_ID, CHEST_ID, TREE_ID
 from game.items import item_registry
 from game.items.item import ItemCategory, ItemRarity
 from game.inventory.equipment import SLOTS as EQUIPMENT_SLOTS
@@ -384,7 +384,6 @@ PAUSE_BUTTON_HEIGHT = 36
 PAUSE_BUTTON_GAP = 14
 
 _PAUSE_MAIN_ACTIONS = ("play", "settings", "save", "load", "restart", "close")
-_PAUSE_SETTINGS_ACTIONS = ("zoom_out", "zoom_in", "back")
 
 
 def _pause_button_rects(actions) -> Dict[str, pygame.Rect]:
@@ -397,8 +396,67 @@ def _pause_button_rects(actions) -> Dict[str, pygame.Rect]:
     }
 
 
+# --- Settings sub-panel layout: a real panel (see _draw_panel_chrome) with
+# one row per adjustable value (Zoom / Music Volume / SFX Volume), each a
+# -/+ stepper around a live percentage, plus a Back button -- replacing
+# what used to be 3 bare buttons floating on the dark overlay. ---
+SETTINGS_PANEL_WIDTH = 460
+SETTINGS_PANEL_HEIGHT = 276
+SETTINGS_TITLE_HEIGHT = 38
+SETTINGS_ROW_HEIGHT = 40
+SETTINGS_ROW_GAP = 8
+SETTINGS_STEP_BUTTON_SIZE = 28
+SETTINGS_STEP_BUTTON_GAP = 66  # space between the -/+ buttons, where the value text sits
+SETTINGS_BACK_WIDTH = 130
+SETTINGS_BACK_HEIGHT = 36
+
+# (row key, label, value formatter over (camera, music_volume, sfx_volume))
+# -- one source of truth shared by layout, hit-testing and drawing.
+_SETTINGS_ROWS = (
+    ("zoom", "Zoom", lambda camera, music_volume, sfx_volume: f"{round(camera.zoom * 100)}%"),
+    ("music", "Music Volume", lambda camera, music_volume, sfx_volume: f"{round(music_volume * 100)}%"),
+    ("sfx", "SFX Volume", lambda camera, music_volume, sfx_volume: f"{round(sfx_volume * 100)}%"),
+)
+
+
+def settings_panel_rect() -> pygame.Rect:
+    x = (WINDOW_WIDTH - SETTINGS_PANEL_WIDTH) // 2
+    y = (WINDOW_HEIGHT - SETTINGS_PANEL_HEIGHT) // 2
+    return pygame.Rect(x, y, SETTINGS_PANEL_WIDTH, SETTINGS_PANEL_HEIGHT)
+
+
+def settings_row_rect(index: int) -> pygame.Rect:
+    panel = settings_panel_rect()
+    y = panel.y + SETTINGS_TITLE_HEIGHT + 20 + index * (SETTINGS_ROW_HEIGHT + SETTINGS_ROW_GAP)
+    return pygame.Rect(panel.x + 20, y, SETTINGS_PANEL_WIDTH - 40, SETTINGS_ROW_HEIGHT)
+
+
+def settings_back_button_rect() -> pygame.Rect:
+    panel = settings_panel_rect()
+    return pygame.Rect(
+        panel.centerx - SETTINGS_BACK_WIDTH // 2, panel.bottom - SETTINGS_BACK_HEIGHT - 16,
+        SETTINGS_BACK_WIDTH, SETTINGS_BACK_HEIGHT,
+    )
+
+
+def _settings_step_button_rects() -> Dict[str, pygame.Rect]:
+    rects = {}
+    for i, (key, _label, _fmt) in enumerate(_SETTINGS_ROWS):
+        row = settings_row_rect(i)
+        up = pygame.Rect(0, 0, SETTINGS_STEP_BUTTON_SIZE, SETTINGS_STEP_BUTTON_SIZE)
+        up.midright = (row.right, row.centery)
+        down = pygame.Rect(0, 0, SETTINGS_STEP_BUTTON_SIZE, SETTINGS_STEP_BUTTON_SIZE)
+        down.midright = (up.left - SETTINGS_STEP_BUTTON_GAP, row.centery)
+        rects[f"{key}_up"] = up
+        rects[f"{key}_down"] = down
+    rects["back"] = settings_back_button_rect()
+    return rects
+
+
 def pause_menu_button_rects(settings_open: bool) -> Dict[str, pygame.Rect]:
-    return _pause_button_rects(_PAUSE_SETTINGS_ACTIONS if settings_open else _PAUSE_MAIN_ACTIONS)
+    if settings_open:
+        return _settings_step_button_rects()
+    return _pause_button_rects(_PAUSE_MAIN_ACTIONS)
 
 
 def pause_button_at_screen_pos(pos, settings_open: bool) -> Optional[str]:
@@ -586,8 +644,15 @@ class Renderer:
         self.character_animations = assets.load_all_character_animations(player_frame_size)
         self.enemy_animations = assets.load_enemy_animations()
         self.summon_animations = assets.load_summon_animations()
-        self.background_tile = assets.load_background_tile()
+        # Each layer pre-scaled to the window's height once here rather
+        # than every frame -- native width (320px) is kept as-is since
+        # that's the horizontal tiling period (see _draw_background).
+        self.background_layers = {
+            name: pygame.transform.scale(surf, (surf.get_width(), WINDOW_HEIGHT))
+            for name, surf in assets.load_background_layers().items()
+        }
         self.item_icons = assets.load_static_item_icons()
+        self.tree_sprites = assets.load_tree_sprites()
 
         self.crumble_shake_frames = assets.load_crumble_shake_frames(TILE_SIZE)
         self.checkpoint_active_frames = assets.load_checkpoint_active_frames(TILE_SIZE)
@@ -597,6 +662,7 @@ class Renderer:
         self.ui_theme = assets.load_ui_theme()
 
         self._scaled_tile_cache = {}
+        self._scaled_tree_cache = {}
         self._darkness_overlay_cache = {}
         self._nine_slice_cache = {}
         self._anim_counter = 0
@@ -605,6 +671,8 @@ class Renderer:
         self._sunset_overlay.fill((255, 140, 70, 255))
         self._night_overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         self._night_overlay.fill((10, 10, 35, 255))
+        self._sleep_overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        self._sleep_overlay.fill((5, 5, 10, 255))
 
     def draw(
         self, window, world, player, camera, enemies, projectiles, world_clock, particles,
@@ -616,6 +684,7 @@ class Renderer:
         npcs=(), talking_to=None, npc_shop_open: bool = False,
         damage_numbers=None, has_save: bool = False, chest_open: bool = False,
         enemy_projectiles=(), chest_storage=None, map_open: bool = False,
+        prefs=None, sleep_fade_ratio: float = 0.0,
     ) -> None:
         if title_open:
             self._draw_title_screen(window, has_save)
@@ -678,8 +747,18 @@ class Renderer:
         if map_open:
             self._draw_map_screen(window, world, player)
         if paused:
-            self._draw_pause_overlay(window, settings_open)
+            self._draw_pause_overlay(window, camera, prefs, settings_open)
+        if sleep_fade_ratio > 0.0:
+            self._draw_sleep_fade(window, sleep_fade_ratio)
         self._anim_counter += 1
+
+    def _draw_sleep_fade(self, window, ratio: float) -> None:
+        """A brief black fade-out right after waking up (see
+        GameApp.sleep_fade_remaining_s) -- `ratio` runs from 1.0 (just
+        woke up, screen fully black) down to 0.0, drawn over everything
+        else, even the pause overlay, since it's a transition, not a menu."""
+        self._sleep_overlay.set_alpha(int(max(0.0, min(1.0, ratio)) * 255))
+        window.blit(self._sleep_overlay, (0, 0))
 
     def _draw_notification(self, window, notifications) -> None:
         text = notifications.current_text
@@ -758,13 +837,18 @@ class Renderer:
         window.blit(overlay, (int(screen_x), int(screen_y)))
 
     def _draw_background(self, window, camera, world_clock) -> None:
-        tile = self.background_tile
-        w, h = tile.get_size()
-        offset_x = int((camera.x * BACKGROUND_PARALLAX) % w)
-        offset_y = int((camera.y * BACKGROUND_PARALLAX) % h)
-        for x in range(-offset_x, WINDOW_WIDTH, w):
-            for y in range(-offset_y, WINDOW_HEIGHT, h):
-                window.blit(tile, (x, y))
+        # Back to front: opaque Sky first, then each transparent-topped
+        # silhouette layer -- only tiled/scrolled horizontally (each layer
+        # is pre-scaled to the window's own height in __init__), since
+        # these are a fixed sky+skyline composition, not a repeating
+        # ground texture -- tiling vertically would stack mountain
+        # silhouettes on top of each other going up into open sky.
+        for name, layer in self.background_layers.items():
+            parallax = BACKGROUND_LAYER_PARALLAX[name]
+            w = layer.get_width()
+            offset_x = int((camera.x * parallax) % w)
+            for x in range(-offset_x, WINDOW_WIDTH, w):
+                window.blit(layer, (x, 0))
         self._draw_sky_tint(window, world_clock)
 
     def _draw_sky_tint(self, window, world_clock) -> None:
@@ -859,6 +943,32 @@ class Renderer:
             return frame if size == TILE_SIZE else pygame.transform.scale(frame, (size, size))
         return self._tile_texture(tile_id, size)
 
+    def _tree_texture(self, variant_index: int, zoom: float):
+        cache_key = (variant_index, round(zoom, 4))
+        cached = self._scaled_tree_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        base = self.tree_sprites[variant_index]
+        if zoom == 1.0:
+            surface = base
+        else:
+            surface = pygame.transform.scale(base, (int(base.get_width() * zoom), int(base.get_height() * zoom)))
+        self._scaled_tree_cache[cache_key] = surface
+        return surface
+
+    def _draw_tree_sprite(self, window, camera, tx: int, ty: int) -> None:
+        """TREE_ID's tile is a single cell for mining purposes (see
+        tile_registry.TREE_ID) but renders as a full tree sprite from
+        assets/Tiles/Trees.png (2 tiles wide x 3 tiles tall), anchored
+        bottom-center on that cell so it reads as one real tree rather than
+        a stack of blocks. Which of the 2 sprite variants is a deterministic
+        (not stored, not random) function of the tile's own column, so it's
+        stable across frames/reloads without needing extra tile state."""
+        variant_index = (tx * 2654435761) % len(self.tree_sprites)
+        sprite = self._tree_texture(variant_index, camera.zoom)
+        base_x, base_y = camera.world_to_screen(tx * TILE_SIZE + TILE_SIZE / 2, (ty + 1) * TILE_SIZE)
+        window.blit(sprite, (base_x - sprite.get_width() / 2, base_y - sprite.get_height()))
+
     def _draw_world(self, window, world, camera, light_sources, ambient_light, player) -> None:
         tile_px = int(round(TILE_SIZE * camera.zoom))
         tile_x_start = max(0, int(camera.x // TILE_SIZE))
@@ -866,18 +976,31 @@ class Renderer:
         tile_y_start = max(0, int(camera.y // TILE_SIZE))
         tile_y_end = min(WORLD_HEIGHT_TILES - 1, int((camera.y + camera.view_height) // TILE_SIZE) + 1)
 
+        # Trees are collected and drawn in a second pass, after every
+        # ordinary tile -- its sprite is wider than its own tile and would
+        # otherwise get its overlap into a not-yet-drawn neighboring column
+        # painted back over by that column's own (later-drawn) ground tile.
+        trees_to_draw = []
+
         for tx in range(tile_x_start, tile_x_end + 1):
             surface_y = world.surface_height_at(tx)
             for ty in range(tile_y_start, tile_y_end + 1):
                 tile_id = world.get_tile(tx, ty)
                 if tile_id == AIR_ID:
                     continue
-                texture = self._world_tile_texture(world, player, tx, ty, tile_id, tile_px)
+                if tile_id == TREE_ID:
+                    trees_to_draw.append((tx, ty))
+                else:
+                    texture = self._world_tile_texture(world, player, tx, ty, tile_id, tile_px)
+                    screen_x, screen_y = camera.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE)
+                    window.blit(texture, (int(screen_x), int(screen_y)))
                 screen_x, screen_y = camera.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE)
-                window.blit(texture, (int(screen_x), int(screen_y)))
                 local_ambient = lighting.ambient_light_for_depth(ty - surface_y, ambient_light)
                 light = lighting.light_level_at(tx + 0.5, ty + 0.5, light_sources, local_ambient)
                 self._draw_darkness_at(window, screen_x, screen_y, tile_px, tile_px, light)
+
+        for tx, ty in trees_to_draw:
+            self._draw_tree_sprite(window, camera, tx, ty)
 
     def _player_animation_state(self, player) -> str:
         if player.double_jump_visual_timer > 0.0:
@@ -2231,31 +2354,71 @@ class Renderer:
 
     # --- Pause menu ---
 
-    def _draw_pause_overlay(self, window, settings_open: bool = False) -> None:
+    def _draw_pause_overlay(self, window, camera, prefs, settings_open: bool = False) -> None:
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 140))
         window.blit(overlay, (0, 0))
-        title = "SETTINGS" if settings_open else "PAUSED"
-        text = self.big_font.render(title, True, (255, 255, 255))
+
+        if settings_open:
+            self._draw_settings_panel(window, camera, prefs)
+            return
+
+        text = self.big_font.render("PAUSED", True, (255, 255, 255))
         window.blit(text, text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 40)))
 
+        # Play/Settings/Save/Load/Quit already say what they do in the art
+        # itself (see _draw_ui_button's docstring); only Restart has no
+        # matching button, so it's the one "blank" plank with a label.
+        button_keys = {"play": "play", "settings": "settings", "save": "save", "load": "load", "restart": "blank", "close": "quit"}
+        labels = {"restart": "Restart"}
         mouse_pos = pygame.mouse.get_pos()
-        if settings_open:
-            button_keys = {"zoom_out": "blank", "zoom_in": "blank", "back": "blank"}
-            labels = {"zoom_out": "Zoom -", "zoom_in": "Zoom +", "back": "Back"}
-        else:
-            # Play/Settings/Save/Load/Quit already say what they do in the
-            # art itself (see _draw_ui_button's docstring); only Restart has
-            # no matching button, so it's the one "blank" plank with a label.
-            button_keys = {"play": "play", "settings": "settings", "save": "save", "load": "load", "restart": "blank", "close": "quit"}
-            labels = {"restart": "Restart"}
-        for action, rect in pause_menu_button_rects(settings_open).items():
+        for action, rect in pause_menu_button_rects(False).items():
             hovered = rect.collidepoint(mouse_pos)
             self._draw_ui_button(window, rect, button_keys[action], hovered=hovered)
             label = labels.get(action)
             if label is not None:
                 label_text = self.font.render(label, True, (235, 230, 210))
                 window.blit(label_text, label_text.get_rect(center=rect.center))
+
+    def _draw_settings_panel(self, window, camera, prefs) -> None:
+        """A real panel (unlike the old 3 bare buttons on the dark
+        overlay) with a -/+ stepper row per adjustable value -- Zoom
+        (already existed), Music Volume and SFX Volume (new: see
+        game/core/music.py's/sfx.py's set_volume and GameApp.
+        adjust_music_volume/adjust_sfx_volume). `prefs` is duck-typed
+        (only .music_volume/.sfx_volume read) so a caller that hasn't
+        wired real preferences yet still gets sane values, not a crash."""
+        music_volume = getattr(prefs, "music_volume", 0.4)
+        sfx_volume = getattr(prefs, "sfx_volume", 0.7)
+
+        panel = settings_panel_rect()
+        self._draw_panel_chrome(window, panel, "Settings", SETTINGS_TITLE_HEIGHT)
+
+        mouse_pos = pygame.mouse.get_pos()
+        step_rects = _settings_step_button_rects()
+        for i, (key, label, value_fmt) in enumerate(_SETTINGS_ROWS):
+            row = settings_row_rect(i)
+            label_surface = self.font.render(label, True, (230, 228, 235))
+            window.blit(label_surface, (row.x, row.centery - label_surface.get_height() // 2))
+
+            down_rect, up_rect = step_rects[f"{key}_down"], step_rects[f"{key}_up"]
+            for rect, glyph in ((down_rect, "-"), (up_rect, "+")):
+                hovered = rect.collidepoint(mouse_pos)
+                texture = self.ui_theme["cell_chosen"] if hovered else self.ui_theme["cell"]
+                window.blit(pygame.transform.scale(texture, rect.size), rect.topleft)
+                pygame.draw.rect(window, ACCENT_GOLD if hovered else HUD_BORDER, rect, width=1, border_radius=4)
+                glyph_surface = self.font.render(glyph, True, (235, 230, 210))
+                window.blit(glyph_surface, glyph_surface.get_rect(center=rect.center))
+
+            value_surface = self.font.render(value_fmt(camera, music_volume, sfx_volume), True, (215, 212, 222))
+            value_center_x = (down_rect.right + up_rect.left) // 2
+            window.blit(value_surface, value_surface.get_rect(center=(value_center_x, row.centery)))
+
+        back_rect = step_rects["back"]
+        hovered = back_rect.collidepoint(mouse_pos)
+        self._draw_ui_button(window, back_rect, "blank", hovered=hovered)
+        back_text = self.font.render("Back", True, (235, 230, 210))
+        window.blit(back_text, back_text.get_rect(center=back_rect.center))
 
     def _draw_item_icon(self, window, item_id: str, x: int, y: int, size: int) -> None:
         item_def = item_registry.get(item_id)
