@@ -1,7 +1,16 @@
-"""Save/load: seed, player state (including personal-chest stash), world
-clock, in-progress furnace jobs, and modified chunks only -- diffed
-against the procedural baseline, not saved whole (see `_chunk_diff`).
-NPCs are not persisted: they're regenerated from spawn conditions + house
+"""Save/load: seed, player state (including personal-chest stash and any
+in-progress timed craft -- see crafting_system.CraftJob), world
+clock, in-progress furnace jobs, modified chunks, any world-generated loot
+Chests that have actually been opened (see game/world/loot_chest.py) --
+only those, since an untouched one re-derives its roll deterministically
+from (seed, position) on first open, nothing to save ahead of time -- and
+the Map screen's fog-of-war (`World.explored_cells`, see
+game/world/exploration.py). Chunks are diffed against the procedural
+baseline, not saved whole (see `World.chunk_diff`) -- covering both
+currently-loaded dirty chunks and ones already unloaded since their last
+edit (`World._unloaded_chunk_diffs`), so a chunk's edits survive the
+player simply wandering far enough away before the next save. NPCs are
+not persisted: they're regenerated from spawn conditions + house
 assignment on load (see game/npcs/npc_spawner.py), same
 transient/regenerable treatment as enemies.
 
@@ -17,36 +26,17 @@ import json
 import os
 from typing import Optional, Tuple
 
-from game.settings import SAVE_FILE_PATH, CHUNK_WIDTH, WORLD_WIDTH_TILES
+from game.settings import SAVE_FILE_PATH, LOOT_CHEST_SLOTS
 from game.crafting.furnace_system import FurnaceManager, FurnaceJob
+from game.crafting.crafting_system import CraftJob
 from game.entities import character_registry, class_registry
 from game.entities.player import Player
-from game.inventory.inventory import Slot
+from game.inventory.inventory import Inventory, Slot
 from game.skills.skills import SKILL_IDS
 from game.core.world_clock import WorldClock
 from game.world.world import World
-from game.world.world_generator import generate_column
 
 SAVE_FORMAT_VERSION = 1
-
-
-def _chunk_diff(world: World, chunk_x: int, chunk) -> list:
-    """(local_x, y, tile_id) triples for every tile in this chunk that
-    differs from the procedural baseline -- generate_column is a cheap
-    pure function of (seed, x), so recomputing it at save time to diff
-    against is fine, the same cost already paid every chunk load/unload."""
-    diff = []
-    base_x = chunk_x * CHUNK_WIDTH
-    for local_x in range(CHUNK_WIDTH):
-        world_x = base_x + local_x
-        if world_x >= WORLD_WIDTH_TILES:
-            break
-        baseline = generate_column(world.seed, world_x)
-        live = chunk.tiles[local_x]
-        for y, tile_id in enumerate(live):
-            if tile_id != baseline[y]:
-                diff.append((local_x, y, tile_id))
-    return diff
 
 
 def serialize(world: World, player: Player, world_clock: WorldClock, furnace_manager: FurnaceManager) -> dict:
@@ -80,6 +70,11 @@ def serialize(world: World, player: Player, world_clock: WorldClock, furnace_man
             "personal_chest": [
                 {"item_id": s.item_id, "quantity": s.quantity} for s in player.personal_chest.slots
             ],
+            "craft_job": None if player.craft_job is None else {
+                "recipe_id": player.craft_job.recipe_id,
+                "remaining_s": player.craft_job.remaining_s,
+                "total_s": player.craft_job.total_s,
+            },
         },
         "furnace_jobs": [
             {
@@ -90,8 +85,25 @@ def serialize(world: World, player: Player, world_clock: WorldClock, furnace_man
             for pos, job in furnace_manager.jobs.items()
         ],
         "dirty_chunks": [
-            {"chunk_x": chunk_x, "diff": _chunk_diff(world, chunk_x, chunk)}
+            {"chunk_x": chunk_x, "diff": world.chunk_diff(chunk_x, chunk)}
             for chunk_x, chunk in world.chunks.items() if chunk.dirty
+        ] + [
+            # Chunks that were dirty but have since been unloaded (see
+            # World._unloaded_chunk_diffs) -- already diffed at unload
+            # time, so no need to recompute here.
+            {"chunk_x": chunk_x, "diff": diff}
+            for chunk_x, diff in world._unloaded_chunk_diffs.items()
+        ],
+        "chest_loot": [
+            {
+                "x": pos[0], "y": pos[1],
+                "slots": [{"item_id": s.item_id, "quantity": s.quantity} for s in inventory.slots],
+            }
+            for pos, inventory in world.chest_loot.items()
+        ],
+        "explored_cells": [
+            {"x": cell[0], "y": cell[1], "color": list(color)}
+            for cell, color in world.explored_cells.items()
         ],
     }
 
@@ -104,6 +116,15 @@ def deserialize(data: dict) -> Tuple[World, Player, WorldClock, FurnaceManager]:
         for local_x, y, tile_id in chunk_data["diff"]:
             chunk.tiles[local_x][y] = tile_id
         chunk.dirty = True
+    for chest_data in data.get("chest_loot", []):
+        inventory = Inventory(size=LOOT_CHEST_SLOTS)
+        for index, saved_slot in enumerate(chest_data["slots"]):
+            if index >= len(inventory.slots):
+                break
+            inventory.slots[index] = Slot(item_id=saved_slot["item_id"], quantity=saved_slot["quantity"])
+        world.chest_loot[(chest_data["x"], chest_data["y"])] = inventory
+    for cell_data in data.get("explored_cells", []):
+        world.explored_cells[(cell_data["x"], cell_data["y"])] = tuple(cell_data["color"])
 
     world_clock = WorldClock()
     world_clock.time_of_day = data["world_clock"]["time_of_day"]
@@ -134,6 +155,13 @@ def deserialize(data: dict) -> Tuple[World, Player, WorldClock, FurnaceManager]:
             break
         player.personal_chest.slots[index] = Slot(
             item_id=saved_slot["item_id"], quantity=saved_slot["quantity"],
+        )
+    craft_job_data = pdata.get("craft_job")
+    if craft_job_data is not None:
+        player.craft_job = CraftJob(
+            recipe_id=craft_job_data["recipe_id"],
+            remaining_s=craft_job_data["remaining_s"],
+            total_s=craft_job_data["total_s"],
         )
 
     furnace_manager = FurnaceManager()

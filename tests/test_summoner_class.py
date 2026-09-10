@@ -6,7 +6,7 @@ GameApp smoke test through the two select screens.
 """
 import pygame  # noqa: F401
 
-from game.settings import DEFAULT_SEED, WORLD_WIDTH_TILES, TILE_SIZE
+from game.settings import DEFAULT_SEED, WORLD_WIDTH_TILES, TILE_SIZE, CHUNK_WIDTH
 from game.entities.player import Player
 from game.entities.enemy import Enemy
 from game.entities import enemy_registry, class_registry, summon_registry, summon_ai
@@ -15,6 +15,7 @@ from game.combat import combat_system
 from game.crafting import recipe_registry
 from game.items import item_registry
 from game.world.world import World
+from game.world.tile_registry import STONE_ID
 from game.core.camera import Camera
 from game.core.notifications import NotificationQueue
 from game.input.input_handler import InputHandler
@@ -226,6 +227,35 @@ def test_summon_chases_a_nearby_enemy_and_damages_it_over_time():
         combat_system.resolve_summon_attacks(player, summons, enemies)
 
     assert enemy.health < start_health
+
+
+def test_summon_climbs_over_a_wall_instead_of_getting_stuck_against_it():
+    """Regression test: flying straight at its target with no wall-
+    routing logic used to mean the summon just pressed into any wall/
+    ledge directly in the way, forever, instead of rising up and over it
+    -- what the user reported as the summon "having problems" on uneven
+    terrain, the same underlying issue as enemy_ai's flying enemies."""
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    air_y = (world.surface_spawn_y(x) - 6) * TILE_SIZE
+
+    wall_x = x + 3
+    chunk = world.get_or_create_chunk(world.chunk_index_for(wall_x))
+    air_row = int(air_y // TILE_SIZE)
+    for dy in range(-5, 6):
+        chunk.set_tile(wall_x % CHUNK_WIDTH, air_row + dy, STONE_ID)
+
+    player = Player(x * TILE_SIZE, air_y, class_id="summoner")
+    summon = _spawn_summon_centered_on(summon_registry.get("twig_sprite"), player.center_x, player.center_y)
+    enemy = Enemy(enemy_registry.get("slime"), (x + 8) * TILE_SIZE, air_y)
+    enemies = [enemy]
+
+    start_x = summon.x
+    for _ in range(240):
+        summon_ai.update(summon, world, player, enemies, dt=1 / 60)
+
+    assert summon.x > start_x + TILE_SIZE * 2  # made real progress, not stuck at the wall
+    assert summon.y < air_y  # climbed above its start altitude to get over it
 
 
 def test_summon_hovers_near_player_with_no_enemies_around():

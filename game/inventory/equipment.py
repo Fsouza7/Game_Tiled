@@ -32,13 +32,6 @@ class Equipment:
             if item_id is not None:
                 emit = max(emit, item_registry.get(item_id).light_emit)
         return emit
-        """Brightest equipped item's light_emit (0-15). Worn light sources
-        don't stack -- two glowing pieces still count as one lamp."""
-        emit = 0
-        for item_id in self.slots.values():
-            if item_id is not None:
-                emit = max(emit, item_registry.get(item_id).light_emit)
-        return emit
 
     def equip_from_inventory(self, inventory: Inventory, item_id: str) -> bool:
         """Moves one `item_id` from `inventory` into its equipment slot.

@@ -6,7 +6,8 @@ import pygame
 from game.settings import (
     WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, FPS,
     TILE_SIZE, DEFAULT_SEED, WORLD_WIDTH_TILES, HITPOINTS_HP_PER_LEVEL,
-    CRAFTING_XP_PER_SMELT, BOSS_COIN_BOUNTY,
+    CRAFTING_XP_PER_SMELT, BOSS_COIN_BOUNTY, STATION_SEARCH_RADIUS_TILES,
+    CAMERA_HIT_SHAKE_DURATION_S, CAMERA_HIT_SHAKE_PX_PER_DAMAGE, CAMERA_HIT_SHAKE_MAX_PX,
 )
 from game.world.world import World
 from game.world.tile_registry import PERSONAL_CHEST_ID
@@ -18,6 +19,7 @@ from game.entities.enemy_spawner import EnemySpawner
 from game.combat import combat_system
 from game.crafting import crafting_system
 from game.crafting.furnace_system import FurnaceManager, nearest_station_tile
+from game.inventory.inventory import Inventory
 from game.items import item_registry
 from game.skills.skills import SKILL_NAMES
 from game.core.camera import Camera
@@ -25,10 +27,12 @@ from game.core.debug_overlay import DebugOverlay
 from game.core.world_clock import WorldClock
 from game.core.notifications import NotificationQueue
 from game.core import save_system
+from game.core import music
+from game.core import sfx
 from game.input.input_handler import InputHandler
 from game.rendering.renderer import Renderer
 from game.rendering.particles import ParticleSystem
-from game.rendering.damage_numbers import DamageNumbers, drain_popups
+from game.rendering.damage_numbers import DamageNumbers, drain_popups, PLAYER_HIT_COLOR, ENEMY_HIT_COLOR
 from game.settings import PARTICLE_DUST_STEP_INTERVAL_S
 from game.npcs.npc_spawner import NpcSpawner, nearest_in_range
 from game.npcs import npc_registry
@@ -42,6 +46,8 @@ class GameApp:
         pygame.display.set_caption(WINDOW_TITLE)
         self.window = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         self.clock = pygame.time.Clock()
+        music.start_background_music()
+        sfx.init()
 
         self.seed = seed
         self.input_handler = InputHandler()
@@ -99,7 +105,12 @@ class GameApp:
         self.selected_skill_id = "attack"
         self.talking_to = None
         self.npc_shop_open = False
+        self.map_open = False
         self.chest_open = False
+        # None = the player's own Personal Chest stash; a (tile_x, tile_y)
+        # tuple = a specific world-generated loot Chest (see
+        # active_chest_inventory / InputHandler._open_chest_ui).
+        self.open_chest_pos = None
 
     def restart(self) -> None:
         self._new_run(self.seed, self.player.character_id, self.player.class_id)
@@ -162,10 +173,12 @@ class GameApp:
         self.selected_skill_id = "attack"
         self.talking_to = None
         self.npc_shop_open = False
+        self.map_open = False
         self.title_open = False
         self.character_select_open = False
         self.class_select_open = False
         self.chest_open = False
+        self.open_chest_pos = None
 
         self.notifications.push("Game loaded")
         logger.info("Loaded game from %s", save_system.SAVE_FILE_PATH)
@@ -201,6 +214,7 @@ class GameApp:
             self.world.update(dt)
             self.world.ensure_chunks_around(self.player.center_x)
             self.player.physics_step(self.world, dt)
+            self.world.reveal_map_around(self.player.center_x, self.player.center_y)
 
             for enemy in self.enemies:
                 if isinstance(enemy, Boss):
@@ -230,9 +244,11 @@ class GameApp:
             self._update_footstep_dust(dt)
             self._handle_checkpoint_activation()
             self._update_furnace(dt)
+            self._update_crafting(dt)
             self.particles.update(dt)
             self.damage_numbers.update(dt)
             self.notifications.update(dt)
+            self.camera.update(dt)
 
             self.camera.follow(self.player.center_x, self.player.center_y)
 
@@ -247,7 +263,8 @@ class GameApp:
             summons=self.summons, skills_open=self.skills_open, selected_skill_id=self.selected_skill_id,
             npcs=self.npcs, talking_to=self.talking_to, npc_shop_open=self.npc_shop_open,
             damage_numbers=self.damage_numbers, chest_open=self.chest_open,
-            enemy_projectiles=self.enemy_projectiles,
+            chest_storage=self.active_chest_inventory() if self.chest_open else None,
+            enemy_projectiles=self.enemy_projectiles, map_open=self.map_open,
         )
         self.debug_overlay.draw(self.window, self.clock, self.player, self.world, self.camera, self.enemies, self.world_clock, npcs=self.npcs)
         pygame.display.flip()
@@ -274,14 +291,31 @@ class GameApp:
         self.talking_to = None
         self.npc_shop_open = False
 
+    def active_chest_inventory(self) -> Inventory:
+        """Which Inventory the open chest panel reads/writes -- the
+        player's own Personal Chest stash by default, or a specific world
+        Chest's loot when open_chest_pos names one."""
+        if self.open_chest_pos is None:
+            return self.player.personal_chest
+        return self.world.get_chest_inventory(*self.open_chest_pos)
+
     def close_chest(self) -> None:
         self.chest_open = False
+        self.open_chest_pos = None
 
     def _close_chest_if_out_of_range(self) -> None:
         if not self.chest_open:
             return
-        if nearest_station_tile(self.world, self.player.center_x, self.player.center_y, PERSONAL_CHEST_ID) is None:
+        if self.open_chest_pos is None:
+            if nearest_station_tile(self.world, self.player.center_x, self.player.center_y, PERSONAL_CHEST_ID) is None:
+                self.chest_open = False
+            return
+        tile_x, tile_y = self.open_chest_pos
+        center_tx = int(self.player.center_x // TILE_SIZE)
+        center_ty = int(self.player.center_y // TILE_SIZE)
+        if max(abs(tile_x - center_tx), abs(tile_y - center_ty)) > STATION_SEARCH_RADIUS_TILES:
             self.chest_open = False
+            self.open_chest_pos = None
 
     def _update_npcs(self) -> None:
         newly = self.npc_spawner.update(self.world, self.player, self.npcs)
@@ -296,12 +330,22 @@ class GameApp:
         """Moves queued hits off Player/Enemy onto the floating-number
         system -- before dead enemies are filtered out, and using the
         position captured at take_damage time so a lethal hit still
-        pops where it landed after respawn."""
+        pops where it landed after respawn. Every landed hit also gets a
+        Hit Spark burst; only the player *taking* one shakes the camera
+        (scaled by damage -- a Duskwing peck barely nudges it, the Slime
+        King's stomp reads as a real jolt) -- dealing damage to an enemy
+        doesn't, so rapid melee combos against weak enemies don't turn
+        into a nonstop screen wobble."""
         for x, y, amount in drain_popups(self.player):
             self.damage_numbers.spawn(x, y, amount, on_player=True)
+            self.particles.spawn_hit_spark(x, y, color=PLAYER_HIT_COLOR)
+            self.camera.shake(min(CAMERA_HIT_SHAKE_MAX_PX, amount * CAMERA_HIT_SHAKE_PX_PER_DAMAGE), CAMERA_HIT_SHAKE_DURATION_S)
+            sfx.play("hit_player")
         for enemy in self.enemies:
             for x, y, amount in drain_popups(enemy):
+                self.particles.spawn_hit_spark(x, y, color=ENEMY_HIT_COLOR)
                 self.damage_numbers.spawn(x, y, amount, on_player=False)
+                sfx.play("hit_enemy")
 
     def _collect_enemy_drops(self) -> None:
         for enemy in self.enemies:
@@ -328,6 +372,21 @@ class GameApp:
             self.notifications.push(f"{quantity}x {item_registry.get(item_id).name} ready!")
             self._collect_and_announce(item_id, quantity)
             self.player.skills.add_xp("crafting", CRAFTING_XP_PER_SMELT * self.player.skills.crafting_xp_multiplier())
+            sfx.play("smelt_complete")
+
+    def _update_crafting(self, dt: float) -> None:
+        # update_pending_craft already grants the result and applies XP/
+        # discovery/refund itself (see crafting_system._apply_craft_rewards)
+        # -- unlike _update_furnace's items, don't route this through
+        # _collect_and_announce too, that would grant it twice.
+        recipe, newly_discovered = crafting_system.update_pending_craft(self.player, dt)
+        if recipe is None:
+            return
+        self.notifications.push(f"{recipe.result_quantity}x {item_registry.get(recipe.result_item_id).name} crafted!")
+        for unlocked in newly_discovered:
+            self.notifications.push(f"New recipe unlocked: {unlocked.name}")
+        self.particles.spawn_confetti(self.player.center_x, self.player.center_y, count=10)
+        sfx.play("craft_complete")
 
     def _announce_level_ups(self) -> None:
         for skill_id, level in self.player.skills.drain_level_ups():
@@ -335,6 +394,7 @@ class GameApp:
                 self.player.max_health += HITPOINTS_HP_PER_LEVEL
                 self.player.health += HITPOINTS_HP_PER_LEVEL
             self.notifications.push(f"{SKILL_NAMES[skill_id]} level up! Lv {level}")
+            sfx.play("level_up")
 
     def _update_footstep_dust(self, dt: float) -> None:
         self._dust_step_cooldown = max(0.0, self._dust_step_cooldown - dt)

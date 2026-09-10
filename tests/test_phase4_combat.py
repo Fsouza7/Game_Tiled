@@ -9,7 +9,7 @@ import pygame  # noqa: F401
 
 from game.settings import (
     DEFAULT_SEED, WORLD_WIDTH_TILES, TILE_SIZE, ENEMY_MAX_ALIVE,
-    PLAYER_HIT_INVULNERABILITY_S,
+    PLAYER_HIT_INVULNERABILITY_S, CHUNK_WIDTH,
 )
 from game.entities import tile_collision
 from game.entities.enemy import Enemy
@@ -22,12 +22,26 @@ from game.combat.projectile import Projectile
 from game.crafting import recipe_registry
 from game.items import item_registry
 from game.world.world import World
-from game.world.tile_registry import GRASS_ID
+from game.world.tile_registry import GRASS_ID, STONE_ID, AIR_ID
 
 
 def _make_player_at(world, x_tile):
     surface_y = world.surface_spawn_y(x_tile) + 1
     return Player(x_tile * TILE_SIZE, (surface_y - 1) * TILE_SIZE)
+
+
+def _flatten_ground(world, start_x, end_x, ground_row):
+    """Forces a flat, deterministic run of solid ground (and clear air
+    above it) across [start_x, end_x), bypassing world_generator's noise
+    entirely -- so a test that carves a specific ledge/pit at a known row
+    isn't at the mercy of this seed's natural terrain height varying
+    between columns."""
+    for col in range(start_x, end_x):
+        chunk = world.get_or_create_chunk(world.chunk_index_for(col))
+        local_x = col % CHUNK_WIDTH
+        chunk.set_tile(local_x, ground_row, STONE_ID)
+        chunk.set_tile(local_x, ground_row - 1, AIR_ID)
+        chunk.set_tile(local_x, ground_row - 2, AIR_ID)
 
 
 # --- registry sanity ---
@@ -78,8 +92,14 @@ def test_ground_and_wall_probes():
     assert tile_collision.has_ground_ahead(enemy, world, 1) is True
     assert tile_collision.is_solid_ahead(enemy, world, 1) is False
 
-    # Carve a pit directly ahead -- now there should be no ground there.
+    # Break just the top tile ahead -- ground AI tolerates a 1-tile step
+    # down (real ground still one row further down) the same way it
+    # tolerates a 1-tile step up, so this alone should NOT read as a cliff.
     world.try_break_tile(x + 1, surface_y)
+    assert tile_collision.has_ground_ahead(enemy, world, 1) is True
+
+    # Break the tile below that too -- now it's a genuine 2+ tile drop.
+    world.try_break_tile(x + 1, surface_y + 1)
     assert tile_collision.has_ground_ahead(enemy, world, 1) is False
 
 
@@ -105,9 +125,14 @@ def test_crawler_does_not_walk_off_a_ledge():
     world = World(DEFAULT_SEED)
     x = WORLD_WIDTH_TILES // 2
     surface_y = world.surface_spawn_y(x) + 1
-    # Carve a pit a few tiles to the right so the crawler must turn around.
-    for dy in range(0, 5):
-        world.try_break_tile(x + 3, surface_y + dy)
+    # A flat, deterministic approach (not this seed's natural terrain,
+    # which can rise/fall between columns -- see test_crawler_climbs_a_
+    # one_tile_ledge_instead_of_turning_around) so the only thing in the
+    # crawler's path really is the pit this test digs.
+    _flatten_ground(world, x, x + 5, surface_y)
+    # Carve a genuinely uncrossable pit a couple tiles to the right.
+    for dy in range(0, 6):
+        world.try_break_tile(x + 2, surface_y + dy)
 
     enemy = Enemy(enemy_registry.get("crawler"), x * TILE_SIZE, (surface_y - 1) * TILE_SIZE)
     enemy.facing_right = True  # force it to walk toward the pit deterministically
@@ -116,7 +141,132 @@ def test_crawler_does_not_walk_off_a_ledge():
     from game.entities import enemy_ai
     for _ in range(600):
         enemy_ai.update(enemy, world, player, dt=1 / 60)
-        assert enemy.x < (x + 3) * TILE_SIZE + TILE_SIZE  # never crosses the pit
+        assert enemy.x < (x + 2) * TILE_SIZE + TILE_SIZE  # never crosses the pit
+
+
+def test_crawler_climbs_a_one_tile_ledge_instead_of_turning_around():
+    """Regression test: ground AI has no jump input (unlike the player),
+    so before tile_collision.try_step_up existed, a WALK enemy turned
+    around at *any* solid tile ahead -- including an ordinary 1-tile rise
+    in the terrain, not just a real wall. Given how bumpy generated ground
+    already is, that left ground enemies barely able to move at all."""
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    surface_y = world.surface_spawn_y(x) + 1
+    _flatten_ground(world, x, x + 3, surface_y)
+    # A single-tile step up starting two columns ahead -- ground one tile
+    # higher, with clear air above it to actually stand in.
+    _flatten_ground(world, x + 2, x + 6, surface_y - 1)
+
+    enemy = Enemy(enemy_registry.get("crawler"), x * TILE_SIZE, (surface_y - 1) * TILE_SIZE)
+    enemy.facing_right = True
+    player = _make_player_at(world, x - 30)  # far away, out of chase range
+
+    from game.entities import enemy_ai
+    furthest_x = enemy.x
+    for _ in range(300):
+        enemy_ai.update(enemy, world, player, dt=1 / 60)
+        furthest_x = max(furthest_x, enemy.x)
+
+    # No chase target pulling it onward, so with has_ground_ahead's
+    # matching 1-tile step-down tolerance it's free to wander back down
+    # again afterward (same as it would over any other ordinary bump) --
+    # the thing this test actually cares about is that it *can* climb the
+    # step at all, which "how far right did it ever get" proves without
+    # being sensitive to exactly which side of the step it settles on by
+    # the time the loop ends.
+    assert furthest_x > (x + 3) * TILE_SIZE
+    assert enemy.on_ground
+
+
+def test_crawler_does_not_tunnel_through_a_low_cave_ceiling():
+    """Regression test: try_step_up originally only checked headroom in
+    the column ahead, not the entity's own current column. In a 1-tile-
+    tall corridor (solid floor, solid ceiling directly overhead -- exactly
+    what natural caves look like) with a climbable step ahead, that let
+    the enemy snap up into its own ceiling tile every frame, tunneling
+    straight up through solid rock instead of correctly refusing to climb
+    for lack of headroom."""
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    ground_row = 60
+
+    # A tight 1-tile corridor: floor at ground_row, one tile of walkable
+    # air, solid ceiling directly above that.
+    for col in range(x, x + 6):
+        chunk = world.get_or_create_chunk(world.chunk_index_for(col))
+        local_x = col % CHUNK_WIDTH
+        chunk.set_tile(local_x, ground_row, STONE_ID)
+        chunk.set_tile(local_x, ground_row - 1, AIR_ID)
+        chunk.set_tile(local_x, ground_row - 2, STONE_ID)
+    # A step up starting a couple columns ahead -- the floor rises into
+    # what was walkable air, but the ceiling rises with it, so there's
+    # still only 1 tile of clearance at the new height too.
+    for col in range(x + 2, x + 6):
+        chunk = world.get_or_create_chunk(world.chunk_index_for(col))
+        local_x = col % CHUNK_WIDTH
+        chunk.set_tile(local_x, ground_row - 1, STONE_ID)
+        chunk.set_tile(local_x, ground_row - 2, AIR_ID)
+        chunk.set_tile(local_x, ground_row - 3, STONE_ID)
+
+    enemy = Enemy(enemy_registry.get("crawler"), x * TILE_SIZE, (ground_row - 1) * TILE_SIZE)  # the corridor's walkable row
+    enemy.facing_right = True
+    player = _make_player_at(world, x - 30)  # far away, out of chase range
+
+    from game.entities import enemy_ai
+    for _ in range(120):
+        enemy_ai.update(enemy, world, player, dt=1 / 60)
+        tile_x, tile_y = int(enemy.x // TILE_SIZE), int(enemy.y // TILE_SIZE)
+        assert not world.is_solid(tile_x, tile_y), "enemy tunneled into solid rock"
+
+
+def test_crawler_does_not_freeze_on_a_narrow_perch_with_a_safe_step_down():
+    """Regression test (found by playtesting this session's climb fix): a
+    1-tile-wide perch with an unclimbable wall on one side and an ordinary
+    1-tile step down on the other used to trap a chasing crawler in a
+    zero-net-progress oscillation. Direction is recomputed fresh from the
+    player's position every frame; the moment it edges toward the safe
+    side, the small y offset from falling/settling nudges it just outside
+    ENEMY_CHASE_RADIUS_TILES, so that frame falls back to stale
+    `facing_right` instead -- and before has_ground_ahead tolerated a
+    1-tile descent, that direction read as a cliff too, flipping it right
+    back toward the wall. Net effect: x_vel alternates +/-speed every
+    other frame (never literally 0, which is why a naive "x_vel == 0"
+    check wouldn't have caught this), and the enemy never actually goes
+    anywhere -- visibly frozen just out of melee reach."""
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    row = 50
+
+    def _set_column(col, floor_row, wall_from=None, wall_to=None):
+        chunk = world.get_or_create_chunk(world.chunk_index_for(col))
+        local_x = col % CHUNK_WIDTH
+        for y in range(row - 10, row + 3):
+            chunk.set_tile(local_x, y, AIR_ID)
+        chunk.set_tile(local_x, floor_row, STONE_ID)
+        if wall_from is not None:
+            for y in range(wall_from, wall_to):
+                chunk.set_tile(local_x, y, STONE_ID)
+
+    _set_column(x, row)  # the perch itself
+    for wall_col in (x + 1, x + 2):  # a tall, genuinely unclimbable wall
+        _set_column(wall_col, row, wall_from=row - 6, wall_to=row + 1)
+    for safe_col in (x - 1, x - 2, x - 3):  # an ordinary 1-tile step down
+        _set_column(safe_col, row + 1)
+
+    enemy = Enemy(enemy_registry.get("crawler"), x * TILE_SIZE, (row - 1) * TILE_SIZE)
+    enemy.facing_right = True  # Enemy.__init__ otherwise randomizes this (random.choice) -- pin it for a deterministic run
+    start_x = enemy.x
+    player = _make_player_at(world, x + 10)  # across the wall -- pulls chase direction into it every frame
+
+    from game.entities import enemy_ai
+    for _ in range(180):
+        enemy_ai.update(enemy, world, player, dt=1 / 60)
+
+    # The only direction that isn't a real wall is the safe step down, so
+    # real progress means having gone meaningfully further that way --
+    # not just still jittering within ~1 tile of where it started.
+    assert start_x - enemy.x > TILE_SIZE, "enemy is stuck oscillating on the perch instead of taking the safe step down"
 
 
 def test_duskwing_ignores_gravity_when_not_stunned():
@@ -133,6 +283,34 @@ def test_duskwing_ignores_gravity_when_not_stunned():
     # A ground-bound enemy would have fallen dozens of tiles by now; a flyer
     # should stay roughly at its spawn altitude (small bob notwithstanding).
     assert abs(enemy.y - start_y) < TILE_SIZE * 3
+
+
+def test_duskwing_climbs_over_a_wall_instead_of_getting_stuck_against_it():
+    """Regression test: chasing straight at the player with no wall-
+    routing logic used to mean a flyer just pressed into any wall/ledge
+    directly between it and its target, forever, instead of rising up and
+    over it like it would any other obstacle."""
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    surface_y = world.surface_spawn_y(x) + 1
+    flight_row = surface_y - 20
+
+    wall_x = x + 4
+    chunk = world.get_or_create_chunk(world.chunk_index_for(wall_x))
+    for dy in range(-5, 6):
+        chunk.set_tile(wall_x % CHUNK_WIDTH, flight_row + dy, STONE_ID)
+
+    enemy = Enemy(enemy_registry.get("duskwing"), x * TILE_SIZE, flight_row * TILE_SIZE)
+    player = _make_player_at(world, x + 8)
+    player.y = flight_row * TILE_SIZE
+
+    from game.entities import enemy_ai
+    start_x = enemy.x
+    for _ in range(240):
+        enemy_ai.update(enemy, world, player, dt=1 / 60)
+
+    assert enemy.x > start_x + TILE_SIZE * 2  # made real progress, not stuck at the wall
+    assert enemy.y < flight_row * TILE_SIZE  # climbed above its start altitude to get over it
 
 
 # --- melee combat ---
@@ -522,3 +700,89 @@ def test_enemy_sprites_from_enemies_folder():
     assert renderer._enemy_animation_state(slime) == "idle"
     slime.x_vel = slime.enemy_def.move_speed
     assert renderer._enemy_animation_state(slime) == "chase"
+
+
+# --- hit feedback: hit-spark particles + camera shake ---
+
+def test_game_app_spawns_hit_sparks_and_shakes_camera_on_a_real_hit():
+    """End-to-end through the real GameApp.step loop (_harvest_damage_
+    popups), not just the underlying ParticleSystem/Camera methods --
+    catches wiring mistakes (wrong color, forgetting to trigger the
+    shake) the unit tests for those two systems wouldn't."""
+    from game.core.game_app import GameApp
+    from game.rendering.particles import HIT_SPARK
+
+    app = GameApp(seed=DEFAULT_SEED)
+    try:
+        app.title_open = False
+        app.character_select_open = False
+        app.class_select_open = False
+        x = WORLD_WIDTH_TILES // 2
+        surface_y = app.world.surface_spawn_y(x) + 1
+        app.player.x, app.player.y = x * TILE_SIZE, (surface_y - 1) * TILE_SIZE
+        app.player.inventory.add_item("wood_sword", 1)
+        app.player.inventory.select_hotbar(1)
+
+        enemy = Enemy(enemy_registry.get("slime"), (x + 1) * TILE_SIZE, (surface_y - 1) * TILE_SIZE)
+        app.enemies = [enemy]
+
+        assert app.camera._shake_remaining_s == 0.0
+        combat_system.try_attack(app.player, app.world, app.enemies, (enemy.center_x, enemy.center_y))
+        app.player.take_damage(10.0)  # simulate the player also getting hit this frame
+
+        app.step(dt=1 / 60)
+
+        sparks = [p for p in app.particles.particles if p.kind == HIT_SPARK]
+        assert len(sparks) > 0
+        assert app.camera._shake_remaining_s > 0.0  # the player-taken hit triggered a shake
+    finally:
+        pygame.quit()
+
+
+def test_dealing_damage_to_an_enemy_alone_does_not_shake_the_camera():
+    """Only the player *taking* a hit shakes the camera -- dealing one to
+    an enemy shouldn't, or a flurry of quick melee hits against weak
+    enemies would turn into a nonstop screen wobble."""
+    from game.core.game_app import GameApp
+
+    app = GameApp(seed=DEFAULT_SEED)
+    try:
+        app.title_open = False
+        app.character_select_open = False
+        app.class_select_open = False
+        x = WORLD_WIDTH_TILES // 2
+        surface_y = app.world.surface_spawn_y(x) + 1
+        app.player.x, app.player.y = x * TILE_SIZE, (surface_y - 1) * TILE_SIZE
+        app.player.inventory.add_item("wood_sword", 1)
+        app.player.inventory.select_hotbar(1)
+
+        enemy = Enemy(enemy_registry.get("slime"), (x + 1) * TILE_SIZE, (surface_y - 1) * TILE_SIZE)
+        app.enemies = [enemy]
+
+        combat_system.try_attack(app.player, app.world, app.enemies, (enemy.center_x, enemy.center_y))
+        app.step(dt=1 / 60)
+
+        assert app.camera._shake_remaining_s == 0.0
+    finally:
+        pygame.quit()
+
+
+def test_draw_hit_spark_does_not_crash():
+    import pygame as pg
+    from game.rendering.renderer import Renderer
+    from game.rendering.particles import ParticleSystem
+    from game.rendering.damage_numbers import ENEMY_HIT_COLOR
+    from game.core.camera import Camera
+    from game.settings import WINDOW_WIDTH, WINDOW_HEIGHT
+
+    pg.init()
+    pg.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    renderer = Renderer()
+    window = pg.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    particles = ParticleSystem()
+    particles.spawn_hit_spark(100.0, 100.0, color=ENEMY_HIT_COLOR)
+    camera = Camera()
+
+    renderer._draw_particles(window, particles, camera)
+    particles.update(dt=0.3)  # past its lifetime
+    renderer._draw_particles(window, particles, camera)  # empty list -- still shouldn't crash

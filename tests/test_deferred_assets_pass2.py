@@ -340,6 +340,28 @@ def test_confetti_burst_spawns_the_requested_count():
     assert all(0 <= p.frame_index < 6 for p in system.particles)
 
 
+def test_hit_spark_burst_spawns_the_requested_count_and_color():
+    from game.rendering.particles import HIT_SPARK
+
+    system = ParticleSystem()
+    system.spawn_hit_spark(0.0, 0.0, color=(1, 2, 3), count=5)
+    assert len(system.particles) == 5
+    assert all(p.kind == HIT_SPARK for p in system.particles)
+    assert all(p.color == (1, 2, 3) for p in system.particles)
+    # A real radial burst, not every particle flying the same direction.
+    directions = {(round(p.x_vel, 2), round(p.y_vel, 2)) for p in system.particles}
+    assert len(directions) > 1
+
+
+def test_hit_spark_ignores_gravity_unlike_dust_and_confetti():
+    system = ParticleSystem()
+    system.spawn_hit_spark(0.0, 0.0, color=(255, 255, 255), count=1)
+    spark = system.particles[0]
+    y_vel_before = spark.y_vel
+    system.update(dt=0.05)
+    assert system.particles[0].y_vel == y_vel_before  # no gravity accel applied
+
+
 # Fan, Sand/Mud/Ice started out player-craftable here too, but were later
 # redesigned into world-generated environmental features (see
 # world_generator._place_fan_shaft / _surface_tile_for) -- none of them

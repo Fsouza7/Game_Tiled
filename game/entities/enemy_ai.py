@@ -47,7 +47,13 @@ def _update_walk(enemy: Enemy, world: World, player, dt: float) -> None:
         if _player_in_chase_range(enemy, player):
             direction = 1 if player.center_x > enemy.center_x else -1
 
-        if tile_collision.is_solid_ahead(enemy, world, direction) or not tile_collision.has_ground_ahead(enemy, world, direction):
+        if tile_collision.is_solid_ahead(enemy, world, direction):
+            # A wall -- unless it's just a 1-tile ledge, which ground AI
+            # (no jump input, unlike the player) climbs straight onto
+            # instead of turning around at every bump in the terrain.
+            if not (enemy.on_ground and tile_collision.try_step_up(enemy, world, direction)):
+                direction *= -1
+        elif not tile_collision.has_ground_ahead(enemy, world, direction):
             direction *= -1
 
         enemy.facing_right = direction > 0
@@ -123,6 +129,12 @@ def _update_fly(enemy: Enemy, world: World, player, dt: float) -> None:
             # is advanced by velocity directly (frame-based, no dt scale).
             target_y = enemy.bob_center_y + math.sin(enemy.bob_phase) * FLYING_BOB_AMPLITUDE_TILES * TILE_SIZE
             enemy.y_vel = (target_y - enemy.y) * 0.1
+
+        if enemy.x_vel != 0 and tile_collision.is_solid_ahead(enemy, world, 1 if enemy.x_vel > 0 else -1):
+            # Flying AI has no wall-routing logic (see module docstring) --
+            # rather than pressing straight into a ledge/wall it can't get
+            # around, rise up and over it like it would any other obstacle.
+            enemy.y_vel = -abs(speed)
 
     attempted_x_vel = enemy.x_vel
     tile_collision.move_axis(enemy, world, enemy.x_vel, horizontal=True)

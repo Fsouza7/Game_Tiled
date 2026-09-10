@@ -24,6 +24,7 @@ from game.entities import character_registry, class_registry
 from game.world.world import World
 from game.world import tile_registry
 from game.rendering.damage_numbers import queue_popup
+from game.core import sfx
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,12 @@ class Player(Entity):
         self._mining_target: Optional[Tuple[int, int]] = None
         self._mining_progress = 0.0
         self._mine_tick_accum = 0.0
+
+        # The player's one in-progress timed craft (see
+        # crafting_system.start_craft/update_pending_craft), or None. Not
+        # a crafting_system.CraftJob import here to avoid a circular
+        # import -- crafting_system just reads/writes this attribute.
+        self.craft_job = None
 
         self.invulnerability_remaining = 0.0
         self.attack_cooldown_remaining = 0.0
@@ -398,6 +405,22 @@ class Player(Entity):
         roll = (rng or random.random)()
         return 2 if roll < chance else 1
 
+    @property
+    def mining_target(self) -> Optional[Tuple[int, int]]:
+        """The (tile_x, tile_y) currently being mined, or None -- the
+        renderer uses this to draw an outline/progress overlay on it."""
+        return self._mining_target
+
+    def mining_progress_ratio(self, world: World) -> float:
+        """0..1 fraction of the way to breaking mining_target, or 0.0 if
+        nothing's currently being mined."""
+        if self._mining_target is None:
+            return 0.0
+        tile_def = tile_registry.get(world.get_tile(*self._mining_target))
+        if tile_def.resistance <= 0:
+            return 0.0
+        return min(1.0, self._mining_progress / tile_def.resistance)
+
     def is_in_reach(self, tile_x: int, tile_y: int) -> bool:
         dx = (tile_x + 0.5) * TILE_SIZE - self.center_x
         dy = (tile_y + 0.5) * TILE_SIZE - self.center_y
@@ -453,9 +476,11 @@ class Player(Entity):
 
         self._mining_progress += power
         if self._mining_progress < tile_def.resistance:
+            sfx.play("mine_tick")
             return None
 
         drop = world.try_break_tile(tile_x, tile_y)
+        sfx.play("mine_break")
         self._mining_target = None
         self._mining_progress = 0.0
         if drop is not None:

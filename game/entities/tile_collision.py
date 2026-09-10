@@ -74,8 +74,40 @@ def is_solid_ahead(entity, world: World, direction: int) -> bool:
 
 
 def has_ground_ahead(entity, world: World, direction: int) -> bool:
-    """True if there is solid ground just beyond the entity's leading edge
-    -- used by ground AI to avoid walking off ledges."""
+    """True if there is solid ground just beyond the entity's leading edge,
+    at the entity's current height OR one tile below it -- used by ground
+    AI to avoid walking off a real ledge. The one-tile tolerance mirrors
+    try_step_up's upward one: a small step down is an ordinary bit of
+    bumpy terrain (gravity just carries the entity down onto it), not a
+    hazard -- treating any downward bump the same as a bottomless drop
+    made ground AI reverse away from perfectly safe ground, which could
+    dead-end it against a wall on the only other direction it could turn
+    (both sides then permanently reversing every frame, net velocity 0)."""
     probe_x = _current_tile_column(entity) + direction
     below_y = int((entity.y + entity.height) // TILE_SIZE)
-    return world.is_solid(probe_x, below_y)
+    return world.is_solid(probe_x, below_y) or world.is_solid(probe_x, below_y + 1)
+
+
+def try_step_up(entity, world: World, direction: int) -> bool:
+    """If the tile blocking `direction` (per is_solid_ahead) is only a
+    single-tile-high ledge -- the row directly above it is clear -- snaps
+    the entity up onto it and returns True. Returns False (and leaves the
+    entity untouched) for a taller, genuinely unclimbable wall, or if
+    nothing is blocking in the first place.
+
+    Ground AI has no jump input the way the player does, so without this
+    it would turn around at every 1-tile rise in the terrain -- which,
+    given how bumpy generated ground already is, made ground enemies
+    unable to go more than a tile or two before reversing course."""
+    own_x = _current_tile_column(entity)
+    probe_x = own_x + direction
+    mid_y = int((entity.y + entity.height / 2) // TILE_SIZE)
+    if not world.is_solid(probe_x, mid_y):
+        return False
+    if world.is_solid(probe_x, mid_y - 1) or world.is_solid(own_x, mid_y - 1):
+        # Either the ledge itself is taller than one tile, or there's no
+        # headroom to rise into from where the entity already stands (e.g.
+        # a low cave corridor) -- either way, not climbable.
+        return False
+    entity.y = mid_y * TILE_SIZE - entity.height
+    return True

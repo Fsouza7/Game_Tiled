@@ -26,10 +26,22 @@ from game.rendering.renderer import (
 )
 from game.inventory.inventory import transfer_stack
 from game.crafting.furnace_system import nearest_station_tile
-from game.world.tile_registry import PERSONAL_CHEST_ID
+from game.world.tile_registry import PERSONAL_CHEST_ID, CHEST_ID
 from game.npcs.npc_spawner import nearest_in_range
 from game.npcs import shop as npc_shop
 from game.core import save_system
+from game.core import sfx
+
+
+def _chest_storage_for(game_app):
+    """Resolves the Inventory the open chest panel targets: the player's
+    Personal Chest stash if open_chest_pos is None/unset (falls back the
+    same way for older test doubles that predate loot Chests), or a
+    specific world Chest's loot otherwise."""
+    open_chest_pos = getattr(game_app, "open_chest_pos", None)
+    if open_chest_pos is None:
+        return game_app.player.personal_chest
+    return game_app.world.get_chest_inventory(*open_chest_pos)
 
 
 class InputHandler:
@@ -163,10 +175,12 @@ class InputHandler:
             game_app.furnace_manager.start_smelt(recipe, player.inventory, game_app.world, player.center_x, player.center_y)
             return
 
-        success, newly_discovered = crafting_system.craft_and_discover(recipe, player, game_app.world)
-        if success:
-            for unlocked in newly_discovered:
-                game_app.notifications.push(f"New recipe unlocked: {unlocked.name}")
+        if player.craft_job is not None:
+            if player.craft_job.recipe_id != recipe.id:
+                game_app.notifications.push_throttled("Already crafting something else")
+            return
+
+        crafting_system.start_craft(recipe, player, game_app.world)
 
     def _handle_inventory_click(self, pos, game_app) -> None:
         player = game_app.player
@@ -219,16 +233,31 @@ class InputHandler:
             game_app.npc_shop_open = False
             npc.dialogue_index = 0
             return
-        chest_pos = nearest_station_tile(
+        personal_chest_pos = nearest_station_tile(
             game_app.world, game_app.player.center_x, game_app.player.center_y, PERSONAL_CHEST_ID,
         )
-        if chest_pos is None:
+        if personal_chest_pos is not None:
+            self._open_chest_ui(game_app, open_chest_pos=None)
             return
+
+        loot_chest_pos = nearest_station_tile(
+            game_app.world, game_app.player.center_x, game_app.player.center_y, CHEST_ID,
+        )
+        if loot_chest_pos is not None:
+            self._open_chest_ui(game_app, open_chest_pos=loot_chest_pos)
+
+    def _open_chest_ui(self, game_app, open_chest_pos) -> None:
+        """open_chest_pos is None for the player's own Personal Chest
+        stash (shared across every placed one), or a (tile_x, tile_y)
+        tuple for a specific world-generated loot Chest's one-time roll
+        (see World.get_chest_inventory)."""
         game_app.inventory_open = False
         game_app.crafting_open = False
         game_app.skills_open = False
         self._close_npc_panel(game_app)
         game_app.chest_open = True
+        game_app.open_chest_pos = open_chest_pos
+        sfx.play("chest_open")
 
     def _handle_npc_click(self, pos, game_app) -> None:
         npc = game_app.talking_to
@@ -311,16 +340,17 @@ class InputHandler:
 
     def _handle_chest_click(self, pos, game_app) -> None:
         player = game_app.player
+        storage = _chest_storage_for(game_app)
         bag_index = chest_bag_index_at_screen_pos(pos, len(player.inventory.slots))
         if bag_index is not None:
-            moved = transfer_stack(player.inventory, bag_index, player.personal_chest)
+            moved = transfer_stack(player.inventory, bag_index, storage)
             if moved == 0 and not player.inventory.slots[bag_index].is_empty:
                 game_app.notifications.push_throttled("Chest is full")
             return
-        stash_index = chest_storage_index_at_screen_pos(pos, len(player.personal_chest.slots))
+        stash_index = chest_storage_index_at_screen_pos(pos, len(storage.slots))
         if stash_index is not None:
-            moved = transfer_stack(player.personal_chest, stash_index, player.inventory)
-            if moved == 0 and not player.personal_chest.slots[stash_index].is_empty:
+            moved = transfer_stack(storage, stash_index, player.inventory)
+            if moved == 0 and not storage.slots[stash_index].is_empty:
                 game_app.notifications.push_throttled("Inventory full")
 
     def _close_npc_panel(self, game_app) -> None:
@@ -351,6 +381,7 @@ class InputHandler:
             game_app.inventory_open = not game_app.inventory_open
             game_app.crafting_open = False
             game_app.skills_open = False
+            game_app.map_open = False
             self._close_npc_panel(game_app)
             self._close_chest(game_app)
         elif key == pygame.K_e:
@@ -359,6 +390,7 @@ class InputHandler:
             game_app.crafting_open = not game_app.crafting_open
             game_app.inventory_open = False
             game_app.skills_open = False
+            game_app.map_open = False
             game_app.crafting_scroll_y = 0
             self._close_npc_panel(game_app)
             self._close_chest(game_app)
@@ -366,6 +398,14 @@ class InputHandler:
             game_app.skills_open = not game_app.skills_open
             game_app.inventory_open = False
             game_app.crafting_open = False
+            game_app.map_open = False
+            self._close_npc_panel(game_app)
+            self._close_chest(game_app)
+        elif key == pygame.K_m:
+            game_app.map_open = not game_app.map_open
+            game_app.inventory_open = False
+            game_app.crafting_open = False
+            game_app.skills_open = False
             self._close_npc_panel(game_app)
             self._close_chest(game_app)
         elif key == pygame.K_t:
@@ -411,9 +451,12 @@ class InputHandler:
 
         selected = player.inventory.get_selected_item()
         selected_is_weapon = selected is not None and item_registry.get(selected.item_id).is_weapon
-        if selected_is_weapon:
-            # Pre-aim: face the mouse continuously while a weapon is out,
-            # so the swing/shot direction is never a surprise when you click.
+        if selected_is_weapon and player.x_vel == 0.0:
+            # Pre-aim: face the mouse continuously while a weapon is out and
+            # the player is standing still, so the swing/shot direction is
+            # never a surprise when you click. While actually walking,
+            # movement direction wins instead -- otherwise pressing left
+            # with the cursor on the right flips the sprite the wrong way.
             player.facing_right = world_x >= player.center_x
 
         if mouse_buttons[0] and not selected_is_weapon:

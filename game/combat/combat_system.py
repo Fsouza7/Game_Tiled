@@ -22,6 +22,7 @@ from game.settings import (
 )
 from game.world.world import World
 from game.world import tile_registry
+from game.core import sfx
 
 SUMMON_WEAPON_CLASS = "summon"
 
@@ -121,6 +122,7 @@ def _try_melee_attack(player, item_def, enemies: List[Enemy], aim_dx: float, aim
     player.attack_cooldown_remaining = 1.0 / max(0.1, item_def.speed)
     player.melee_swing_timer = MELEE_SWING_VISUAL_DURATION_S
     player.melee_swing_aim = (aim_dx, aim_dy)
+    sfx.play("melee_swing")
     effective_damage = item_def.damage * player.skills.attack_damage_multiplier()
 
     reach_px = MELEE_REACH_TILES * TILE_SIZE + player.width / 2
@@ -160,6 +162,7 @@ def _try_ranged_attack(player, item_def, aim_dx: float, aim_dy: float) -> Option
     else:
         effective_damage = item_def.damage * player.skills.attack_damage_multiplier()
 
+    sfx.play("ranged_shoot")
     return Projectile(
         player.center_x, player.center_y,
         PROJECTILE_SPEED * aim_dx, PROJECTILE_SPEED * aim_dy,

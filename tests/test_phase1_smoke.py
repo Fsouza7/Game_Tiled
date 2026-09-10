@@ -132,6 +132,84 @@ def test_mining_out_of_reach_does_nothing():
     assert drop is None
 
 
+def test_mining_a_tougher_block_takes_more_than_one_tick_with_the_starter_pickaxe():
+    """PLAYER_MINE_TICK_S is the real friction lever (see settings.py) --
+    at real per-frame dt this should take a perceptible beat, not resolve
+    on the very first tick, for anything tougher than plain dirt."""
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    surface_y = world.surface_spawn_y(x) + 1
+    stone_y = _find_stone_below(world, x, surface_y + 12)
+    player = Player(x * TILE_SIZE, stone_y * TILE_SIZE)
+
+    drop = player.try_mine(world, x, stone_y, dt=1.0)  # one full tick's worth
+    assert drop is None, "stone broke in a single tick -- the wood pickaxe ladder has no felt weight"
+    assert player.mining_progress_ratio(world) > 0.0
+
+
+def test_mining_target_and_progress_ratio_track_the_in_progress_tile():
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    surface_y = world.surface_spawn_y(x) + 1
+    stone_y = _find_stone_below(world, x, surface_y + 12)
+    player = Player(x * TILE_SIZE, stone_y * TILE_SIZE)
+
+    assert player.mining_target is None
+    assert player.mining_progress_ratio(world) == 0.0
+
+    player.try_mine(world, x, stone_y, dt=1.0)
+    assert player.mining_target == (x, stone_y)
+    progress_after_one_tick = player.mining_progress_ratio(world)
+    assert 0.0 < progress_after_one_tick < 1.0
+
+    drop = None
+    for _ in range(200):
+        drop = player.try_mine(world, x, stone_y, dt=1.0)
+        if drop is not None:
+            break
+    assert drop == "stone_block"
+    assert player.mining_target is None  # cleared the instant it breaks
+    assert player.mining_progress_ratio(world) == 0.0
+
+
+def test_mining_progress_resets_when_switching_targets():
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    surface_y = world.surface_spawn_y(x) + 1
+    stone_y = _find_stone_below(world, x, surface_y + 12)
+    player = Player(x * TILE_SIZE, stone_y * TILE_SIZE)
+
+    player.try_mine(world, x, stone_y, dt=1.0)
+    assert player.mining_progress_ratio(world) > 0.0
+
+    player.cancel_mining()
+    assert player.mining_target is None
+    assert player.mining_progress_ratio(world) == 0.0
+
+
+def test_draw_mining_outline_does_not_crash_idle_or_in_progress():
+    import pygame as pg
+    from game.rendering.renderer import Renderer
+    from game.settings import WINDOW_WIDTH, WINDOW_HEIGHT
+
+    pg.init()
+    pg.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    renderer = Renderer()
+    window = pg.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+
+    world = World(DEFAULT_SEED)
+    x = WORLD_WIDTH_TILES // 2
+    surface_y = world.surface_spawn_y(x) + 1
+    stone_y = _find_stone_below(world, x, surface_y + 12)
+    player = Player(x * TILE_SIZE, stone_y * TILE_SIZE)
+    camera = Camera()
+
+    renderer._draw_mining_outline(window, world, player, camera)  # nothing targeted yet -- must no-op
+
+    player.try_mine(world, x, stone_y, dt=1.0)
+    renderer._draw_mining_outline(window, world, player, camera)  # mid-progress
+
+
 # --- building ---
 
 def test_place_block_next_to_solid_ground_succeeds():
@@ -357,6 +435,45 @@ def test_camera_zoom_bounds():
     for _ in range(100):
         camera.zoom_in()
     assert camera.zoom <= CAMERA_MAX_ZOOM
+
+
+def test_camera_shake_offsets_world_to_screen_and_decays_to_zero():
+    camera = Camera()
+    before_x, before_y = camera.world_to_screen(100.0, 100.0)
+    assert (before_x, before_y) == (100.0, 100.0)  # no shake yet, camera at origin/zoom 1
+
+    camera.shake(magnitude_px=10.0, duration_s=0.2)
+    camera.update(dt=0.01)
+    shaken_x, shaken_y = camera.world_to_screen(100.0, 100.0)
+    assert (shaken_x, shaken_y) != (100.0, 100.0)  # actually perturbed
+    assert abs(shaken_x - 100.0) <= 10.0 and abs(shaken_y - 100.0) <= 10.0  # within the requested magnitude
+
+    for _ in range(50):  # well past duration_s
+        camera.update(dt=0.01)
+    settled_x, settled_y = camera.world_to_screen(100.0, 100.0)
+    assert (settled_x, settled_y) == (100.0, 100.0)  # decayed back to nothing
+
+
+def test_camera_shake_does_not_affect_screen_to_world():
+    """Shake is a pure rendering offset -- mining/aim targeting (which
+    goes through screen_to_world) must never be thrown off by a shake in
+    progress."""
+    camera = Camera()
+    before = camera.screen_to_world(400.0, 300.0)
+    camera.shake(magnitude_px=10.0, duration_s=0.2)
+    camera.update(dt=0.01)
+    after = camera.screen_to_world(400.0, 300.0)
+    assert before == after
+
+
+def test_camera_shake_a_stronger_hit_replaces_a_weaker_one_in_progress():
+    camera = Camera()
+    camera.shake(magnitude_px=2.0, duration_s=0.2)
+    camera.shake(magnitude_px=8.0, duration_s=0.2)  # stronger -- should win
+    assert camera._shake_magnitude_px == 8.0
+
+    camera.shake(magnitude_px=1.0, duration_s=0.2)  # weaker, still mid-shake -- should NOT interrupt
+    assert camera._shake_magnitude_px == 8.0
 
 
 # --- chunk loading ---

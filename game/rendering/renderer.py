@@ -20,14 +20,15 @@ from game.settings import (
     LIGHT_SEARCH_MARGIN_TILES, MAX_DARKNESS_ALPHA,
     TORCH_FLICKER_AMPLITUDE, TORCH_FLICKER_SPEED,
     NIGHT_MIN_AMBIENT, DAY_MAX_AMBIENT, CHARACTER_PORTRAIT_SIZE,
+    MAP_CELL_SIZE_TILES, STRUCTURE_SLOT_WIDTH_TILES,
 )
-from game.world import tile_registry, lighting, hazard_feature
-from game.world.tile_registry import AIR_ID, CRUMBLE_PLATFORM_ID, CHECKPOINT_ID, PERSONAL_CHEST_ID
+from game.world import tile_registry, lighting, hazard_feature, structures
+from game.world.tile_registry import AIR_ID, CRUMBLE_PLATFORM_ID, CHECKPOINT_ID, PERSONAL_CHEST_ID, CHEST_ID
 from game.items import item_registry
 from game.items.item import ItemCategory, ItemRarity
 from game.inventory.equipment import SLOTS as EQUIPMENT_SLOTS
 from game.rendering import assets
-from game.rendering.particles import DUST, CONFETTI
+from game.rendering.particles import DUST, CONFETTI, HIT_SPARK
 from game.crafting import recipe_registry, crafting_system, smelt_registry
 from game.crafting.recipe import RecipeDef
 from game.crafting.smelt_recipe import SmeltRecipeDef
@@ -103,6 +104,12 @@ CRAFTING_TITLE_HEIGHT = 38
 # into the hotbar/health HUD as more recipes are added over time.
 CRAFTING_VIEWPORT_HEIGHT = 460
 CRAFTING_SCROLL_STEP = CRAFTING_CELL_SIZE + CRAFTING_CELL_GAP
+# A floor under crafting_panel_height (below): with very few (or, at the
+# very start of a run, zero) recipes discovered yet, the content-fit
+# height used to shrink the whole panel down to almost nothing -- too
+# short for the details panel's own "Hover a recipe / for details" hint
+# to fit, which then visibly overflowed past the panel's bottom border.
+CRAFTING_MIN_PANEL_HEIGHT = CRAFTING_TITLE_HEIGHT + 160
 
 
 # Primary grouping is by what the result *is* (a category a player
@@ -185,7 +192,8 @@ def crafting_content_height(discovered_item_ids) -> int:
 
 
 def crafting_panel_height(discovered_item_ids) -> int:
-    return min(crafting_content_height(discovered_item_ids), CRAFTING_TITLE_HEIGHT + CRAFTING_VIEWPORT_HEIGHT)
+    fitted = min(crafting_content_height(discovered_item_ids), CRAFTING_TITLE_HEIGHT + CRAFTING_VIEWPORT_HEIGHT)
+    return max(fitted, CRAFTING_MIN_PANEL_HEIGHT)
 
 
 def crafting_max_scroll(discovered_item_ids) -> int:
@@ -516,6 +524,57 @@ def chest_storage_index_at_screen_pos(pos, slot_count: int) -> Optional[int]:
     return None
 
 
+# --- Map screen: a scaled view of every explored fog-of-war cell ---
+MAP_PANEL_WIDTH = 760
+MAP_PANEL_HEIGHT = 500
+MAP_PANEL_X = (WINDOW_WIDTH - MAP_PANEL_WIDTH) // 2
+MAP_PANEL_Y = (WINDOW_HEIGHT - MAP_PANEL_HEIGHT) // 2
+MAP_TITLE_HEIGHT = 38
+MAP_VIEW_MARGIN = 16
+MAP_BOTTOM_UI_HEIGHT = 42  # room below the view for the legend row + the close hint
+MAP_BG_COLOR = (10, 10, 16)
+MAP_PLAYER_MARKER_COLOR = (255, 70, 70)
+MAP_STRUCTURE_MARKER_COLORS = {
+    structures.HOUSE: (225, 180, 95),
+    structures.RUINS: (165, 165, 175),
+    structures.UNDERGROUND_ROOM: (170, 120, 230),
+}
+
+
+def map_panel_rect() -> pygame.Rect:
+    return pygame.Rect(MAP_PANEL_X, MAP_PANEL_Y, MAP_PANEL_WIDTH, MAP_PANEL_HEIGHT)
+
+
+def map_view_rect() -> pygame.Rect:
+    panel = map_panel_rect()
+    return pygame.Rect(
+        panel.x + MAP_VIEW_MARGIN, panel.y + MAP_TITLE_HEIGHT + MAP_VIEW_MARGIN,
+        panel.width - MAP_VIEW_MARGIN * 2,
+        panel.height - MAP_TITLE_HEIGHT - MAP_VIEW_MARGIN - MAP_BOTTOM_UI_HEIGHT,
+    )
+
+
+def _discovered_structures(world, min_cx: int, max_cx: int):
+    """Every structure (see game/world/structures.py) whose anchor cell
+    falls within the player's already-explored fog-of-war cells, scanned
+    across every structure slot that overlaps the explored area's x-range.
+    structure_for_slot is a cheap pure function of (seed, slot_index) --
+    same "just recompute it" precedent save_system's chunk diffing already
+    relies on -- so nothing needs to be cached or discovered-tracked
+    separately from World.explored_cells itself."""
+    min_slot = (min_cx * MAP_CELL_SIZE_TILES) // STRUCTURE_SLOT_WIDTH_TILES - 1
+    max_slot = (max_cx * MAP_CELL_SIZE_TILES) // STRUCTURE_SLOT_WIDTH_TILES + 1
+    found = []
+    for slot_index in range(min_slot, max_slot + 1):
+        instance = structures.structure_for_slot(world.seed, slot_index)
+        if instance is None:
+            continue
+        anchor_cell = (instance.anchor_x // MAP_CELL_SIZE_TILES, instance.anchor_y // MAP_CELL_SIZE_TILES)
+        if anchor_cell in world.explored_cells:
+            found.append(instance)
+    return found
+
+
 class Renderer:
     def __init__(self):
         self.font = pygame.font.SysFont("consolas", 14)
@@ -556,7 +615,7 @@ class Renderer:
         summons=(), skills_open: bool = False, selected_skill_id: str = "attack",
         npcs=(), talking_to=None, npc_shop_open: bool = False,
         damage_numbers=None, has_save: bool = False, chest_open: bool = False,
-        enemy_projectiles=(),
+        enemy_projectiles=(), chest_storage=None, map_open: bool = False,
     ) -> None:
         if title_open:
             self._draw_title_screen(window, has_save)
@@ -576,6 +635,7 @@ class Renderer:
         self._draw_background(window, camera, world_clock)
         self._draw_world(window, world, camera, light_sources, ambient_light, player)
         self._draw_hazard_features(window, world, camera)
+        self._draw_mining_outline(window, world, player, camera)
         self._draw_enemies(window, world, enemies, camera, light_sources, ambient_light)
         self._draw_summons(window, summons, camera, light_sources, ambient_light)
         self._draw_npcs(window, world, npcs, camera, light_sources, ambient_light)
@@ -601,6 +661,8 @@ class Renderer:
             self._draw_npc_prompt(window, nearby_npc, camera)
         elif not chest_open:
             chest_pos = _nearest_station_tile(world, player.center_x, player.center_y, PERSONAL_CHEST_ID)
+            if chest_pos is None:
+                chest_pos = _nearest_station_tile(world, player.center_x, player.center_y, CHEST_ID)
             if chest_pos is not None:
                 self._draw_chest_prompt(window, chest_pos, camera)
         if inventory_open:
@@ -612,7 +674,9 @@ class Renderer:
         if talking_to is not None:
             self._draw_npc_panel(window, player, talking_to, npc_shop_open)
         if chest_open:
-            self._draw_chest_panel(window, player)
+            self._draw_chest_panel(window, player, chest_storage if chest_storage is not None else player.personal_chest)
+        if map_open:
+            self._draw_map_screen(window, world, player)
         if paused:
             self._draw_pause_overlay(window, settings_open)
         self._anim_counter += 1
@@ -1060,6 +1124,28 @@ class Renderer:
         end = camera.world_to_screen(*player.hook_target)
         pygame.draw.line(window, (150, 110, 60), start, end, width=max(2, int(3 * camera.zoom)))
         pygame.draw.circle(window, (90, 90, 100), (int(end[0]), int(end[1])), max(3, int(4 * camera.zoom)))
+
+    def _draw_mining_outline(self, window, world, player, camera) -> None:
+        """A gold outline on the tile currently being mined, plus a dark
+        overlay that erodes from the top as it gets closer to breaking --
+        the only feedback mining previously gave was the block vanishing
+        all at once, with no sense of "how close is this" while chipping
+        away at something tougher."""
+        if player.mining_target is None:
+            return
+        tile_x, tile_y = player.mining_target
+        tile_px = max(1, int(round(TILE_SIZE * camera.zoom)))
+        screen_x, screen_y = camera.world_to_screen(tile_x * TILE_SIZE, tile_y * TILE_SIZE)
+        rect = pygame.Rect(int(screen_x), int(screen_y), tile_px, tile_px)
+
+        progress = player.mining_progress_ratio(world)
+        remaining_h = max(0, int(round(rect.height * (1.0 - progress))))
+        if remaining_h > 0:
+            overlay = pygame.Surface((rect.width, remaining_h), pygame.SRCALPHA)
+            overlay.fill((10, 10, 10, 110))
+            window.blit(overlay, (rect.x, rect.y))
+
+        pygame.draw.rect(window, ACCENT_GOLD, rect, width=max(2, int(2 * camera.zoom)))
 
     def _draw_melee_swing(self, window, player, camera) -> None:
         if player.melee_swing_timer <= 0.0:
@@ -1547,14 +1633,21 @@ class Renderer:
     def _recipe_cell_status(self, world, player, furnace_manager, recipe):
         """Returns (status_key, accent_color) for a discovered recipe's
         grid cell -- one of "ready"/"missing"/"needs_station" for a plain
-        recipe, or "smelting"/"furnace_busy" for a smelt recipe depending
-        on the nearby furnace's current job (if any)."""
+        recipe, "smelting"/"furnace_busy" for a smelt recipe depending on
+        the nearby furnace's current job (if any), or "crafting"/
+        "player_busy" for a plain recipe depending on the player's own
+        single in-progress craft job (if any) -- only one craft can run
+        at a time, unlike furnaces, which can multiply by placing more."""
         if isinstance(recipe, SmeltRecipeDef):
             active_job = furnace_manager.nearby_job(world, player.center_x, player.center_y)
             if active_job is not None:
                 if active_job.bar_item_id == recipe.result_item_id:
                     return "smelting", (235, 150, 60)
                 return "furnace_busy", (90, 84, 100)
+        elif player.craft_job is not None:
+            if player.craft_job.recipe_id == recipe.id:
+                return "crafting", (235, 150, 60)
+            return "player_busy", (90, 84, 100)
 
         has_ingredients = crafting_system.has_ingredients(recipe, player.inventory)
         near_station = recipe.station_tile_id is None or crafting_system.is_near_station(
@@ -1585,8 +1678,12 @@ class Renderer:
             qty_text = self.font.render(str(recipe.result_quantity), True, (255, 255, 255))
             window.blit(qty_text, (cell_rect.right - qty_text.get_width() - 3, cell_rect.bottom - qty_text.get_height() - 1))
 
+        active_job = None
         if status == "smelting":
             active_job = furnace_manager.nearby_job(world, player.center_x, player.center_y)
+        elif status == "crafting":
+            active_job = player.craft_job
+        if active_job is not None:
             progress = 1.0 - max(0.0, min(1.0, active_job.remaining_s / active_job.total_s))
             bar_rect = pygame.Rect(cell_rect.x + 3, cell_rect.bottom - 5, cell_rect.width - 6, 3)
             pygame.draw.rect(window, (30, 24, 20), bar_rect, border_radius=2)
@@ -1652,6 +1749,14 @@ class Renderer:
             window.blit(msg, (rect.x, y))
             msg2 = self.font.render("another bar right now", True, (200, 150, 100))
             window.blit(msg2, (rect.x, y + 16))
+        elif status == "crafting":
+            msg = self.font.render(f"Crafting: {max(0.0, player.craft_job.remaining_s):.1f}s left", True, (230, 200, 160))
+            window.blit(msg, (rect.x, y))
+        elif status == "player_busy":
+            msg = self.font.render("Already crafting", True, (200, 150, 100))
+            window.blit(msg, (rect.x, y))
+            msg2 = self.font.render("something else", True, (200, 150, 100))
+            window.blit(msg2, (rect.x, y + 16))
         elif status == "needs_station":
             msg = self.font.render(f"Needs {_station_label(recipe.station_tile_id)}", True, (235, 175, 110))
             window.blit(msg, (rect.x, y))
@@ -1665,10 +1770,10 @@ class Renderer:
             action_text = "Click to start smelting" if is_smelt else "Click to craft"
             msg = self.font.render(action_text, True, (150, 230, 150))
             window.blit(msg, (rect.x, y))
-            if is_smelt:
-                y += 18
-                time_text = self.font.render(f"Takes {recipe.smelt_time_s:.0f}s", True, (195, 190, 175))
-                window.blit(time_text, (rect.x, y))
+            y += 18
+            craft_time_s = recipe.smelt_time_s if is_smelt else crafting_system.craft_time_for(recipe)
+            time_text = self.font.render(f"Takes {craft_time_s:.1f}s", True, (195, 190, 175))
+            window.blit(time_text, (rect.x, y))
 
     # --- Moving hazards (Saw/Rock Head/Spike Head) ---
 
@@ -1716,6 +1821,9 @@ class Renderer:
 
     def _draw_particles(self, window, particles, camera) -> None:
         for p in particles.particles:
+            if p.kind == HIT_SPARK:
+                self._draw_hit_spark(window, p, camera)
+                continue
             frames = self.particle_textures[p.kind]
             frame = frames[p.frame_index] if p.kind == CONFETTI else frames[0]
             ratio = max(0.0, min(1.0, p.lifetime / p.max_lifetime))
@@ -1726,6 +1834,23 @@ class Renderer:
                 sprite.set_alpha(int(255 * ratio))
             screen_x, screen_y = camera.world_to_screen(p.x, p.y)
             window.blit(sprite, (screen_x - size / 2, screen_y - size / 2))
+
+    def _draw_hit_spark(self, window, particle, camera) -> None:
+        """No source art exists for this one (see particles.py's module
+        docstring) -- drawn as a short streak trailing back from the
+        particle's own outward radial velocity, shrinking to nothing as
+        it expires, same "no art, draw it" precedent as the melee arc."""
+        ratio = max(0.0, min(1.0, particle.lifetime / particle.max_lifetime))
+        if ratio <= 0.0:
+            return
+        screen_x, screen_y = camera.world_to_screen(particle.x, particle.y)
+        speed = (particle.x_vel ** 2 + particle.y_vel ** 2) ** 0.5
+        if speed < 0.001:
+            return
+        length = (5.0 * camera.zoom * ratio) + 1.0
+        end_x = screen_x - (particle.x_vel / speed) * length
+        end_y = screen_y - (particle.y_vel / speed) * length
+        pygame.draw.line(window, particle.color, (screen_x, screen_y), (end_x, end_y), max(1, int(round(2 * camera.zoom))))
 
     def _draw_damage_numbers(self, window, damage_numbers, camera) -> None:
         """Floating "-N" pops at the hit's world position. Outlined so
@@ -1864,7 +1989,7 @@ class Renderer:
             self._draw_ui_button(window, rect, button_keys[action], hovered=hovered, enabled=enabled)
 
         hint = (
-            "Click Continue or press Enter to load"
+            "Click Load or press Enter to continue"
             if has_save else
             "No save yet — click New Game or press Enter"
         )
@@ -1919,15 +2044,19 @@ class Renderer:
         hint = self.font.render("Click a class, or press Enter to confirm", True, (170, 170, 180))
         window.blit(hint, hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 150)))
 
-    def _draw_chest_panel(self, window, player) -> None:
+    def _draw_chest_panel(self, window, player, storage) -> None:
+        is_personal = storage is player.personal_chest
         panel = chest_panel_rect()
-        self._draw_panel_chrome(window, panel, "Personal Chest", CHEST_TITLE_HEIGHT)
+        self._draw_panel_chrome(window, panel, "Personal Chest" if is_personal else "Chest", CHEST_TITLE_HEIGHT)
         bag_label = self.font.render("Bag", True, (170, 170, 180))
-        stash_label = self.font.render("Stash", True, (170, 170, 180))
+        stash_label = self.font.render("Stash" if is_personal else "Loot", True, (170, 170, 180))
         window.blit(bag_label, (CHEST_PANEL_X + 14, CHEST_PANEL_Y + CHEST_TITLE_HEIGHT + 10))
         window.blit(stash_label, (CHEST_PANEL_X + CHEST_PANEL_WIDTH // 2 + 10, CHEST_PANEL_Y + CHEST_TITLE_HEIGHT + 10))
         hint = self.font.render("Click a stack to move it  ·  T to close", True, (150, 148, 160))
-        window.blit(hint, hint.get_rect(midbottom=(panel.centerx, panel.bottom - 10)))
+        # panel's 9-sliced frame border is 16px thick (border=4, zoom=4 in
+        # _draw_panel_chrome) -- clear it, or the frame's own trim line
+        # visually bisects the text.
+        window.blit(hint, hint.get_rect(midbottom=(panel.centerx, panel.bottom - 20)))
 
         mouse_pos = pygame.mouse.get_pos()
         hovered_item_id = None
@@ -1937,13 +2066,100 @@ class Renderer:
             self._draw_item_slot(window, rect, slot=slot, highlight=rect.collidepoint(mouse_pos))
             if rect.collidepoint(mouse_pos) and not slot.is_empty:
                 hovered_item_id, hovered_qty = slot.item_id, slot.quantity
-        for index, slot in enumerate(player.personal_chest.slots):
+        for index, slot in enumerate(storage.slots):
             rect = chest_storage_slot_rect(index)
             self._draw_item_slot(window, rect, slot=slot, highlight=rect.collidepoint(mouse_pos))
             if rect.collidepoint(mouse_pos) and not slot.is_empty:
                 hovered_item_id, hovered_qty = slot.item_id, slot.quantity
         if hovered_item_id is not None:
             self._draw_item_tooltip(window, hovered_item_id, hovered_qty, mouse_pos)
+
+    def _draw_map_screen(self, window, world, player) -> None:
+        """Scales World.explored_cells (see game/world/exploration.py) --
+        one pixel per fog-of-war cell -- up to fit the panel, nearest-
+        neighbor so it stays chunky/legible rather than blurry. The map's
+        extent is just the bounding box of what's been explored so far,
+        not the whole world, so it "grows" into view as the player
+        wanders further out instead of starting as a mostly-empty void."""
+        panel = map_panel_rect()
+        self._draw_panel_chrome(window, panel, "Map", MAP_TITLE_HEIGHT)
+        view_rect = map_view_rect()
+        pygame.draw.rect(window, MAP_BG_COLOR, view_rect)
+
+        explored = world.explored_cells
+        if not explored:
+            hint = self.font.render("Nothing explored yet -- walk around", True, (170, 170, 180))
+            window.blit(hint, hint.get_rect(center=view_rect.center))
+        else:
+            cell_xs = [cell[0] for cell in explored]
+            cell_ys = [cell[1] for cell in explored]
+            min_cx, max_cx = min(cell_xs), max(cell_xs)
+            min_cy, max_cy = min(cell_ys), max(cell_ys)
+            grid_w = max_cx - min_cx + 1
+            grid_h = max_cy - min_cy + 1
+
+            cell_surface = pygame.Surface((grid_w, grid_h))
+            cell_surface.fill(MAP_BG_COLOR)
+            for (cx, cy), color in explored.items():
+                cell_surface.set_at((cx - min_cx, cy - min_cy), color)
+
+            scale = min(view_rect.width / grid_w, view_rect.height / grid_h)
+            scaled_w = max(1, round(grid_w * scale))
+            scaled_h = max(1, round(grid_h * scale))
+            scaled = pygame.transform.scale(cell_surface, (scaled_w, scaled_h))
+            blit_x = view_rect.x + (view_rect.width - scaled_w) // 2
+            blit_y = view_rect.y + (view_rect.height - scaled_h) // 2
+            window.blit(scaled, (blit_x, blit_y))
+
+            def _to_screen(cell_x: int, cell_y: int):
+                return (
+                    blit_x + int((cell_x - min_cx + 0.5) * scale),
+                    blit_y + int((cell_y - min_cy + 0.5) * scale),
+                )
+
+            for instance in _discovered_structures(world, min_cx, max_cx):
+                marker_pos = _to_screen(instance.anchor_x // MAP_CELL_SIZE_TILES, instance.anchor_y // MAP_CELL_SIZE_TILES)
+                self._draw_map_structure_marker(window, instance.kind, marker_pos)
+
+            player_cell_x = int(player.center_x // TILE_SIZE) // MAP_CELL_SIZE_TILES
+            player_cell_y = int(player.center_y // TILE_SIZE) // MAP_CELL_SIZE_TILES
+            marker_x, marker_y = _to_screen(player_cell_x, player_cell_y)
+            pygame.draw.circle(window, MAP_PLAYER_MARKER_COLOR, (marker_x, marker_y), 4)
+            pygame.draw.circle(window, (255, 255, 255), (marker_x, marker_y), 4, 1)
+
+        pygame.draw.rect(window, ACCENT_GOLD, view_rect, 1)
+        footer_center_y = view_rect.bottom + MAP_BOTTOM_UI_HEIGHT // 2
+        self._draw_map_legend(window, view_rect.x, footer_center_y)
+        hint = self.font.render("M to close", True, (150, 148, 160))
+        window.blit(hint, hint.get_rect(midright=(view_rect.right, footer_center_y)))
+
+    def _draw_map_structure_marker(self, window, kind: str, pos) -> None:
+        """A small fixed-size shape per structure kind -- shape, not just
+        color, so it still reads in grayscale/at a glance: House is a
+        solid square (intact), Ruins a hollow square (decayed, walls
+        missing), Underground Room a solid diamond (distinct silhouette
+        for something found underground rather than on the surface)."""
+        x, y = pos
+        color = MAP_STRUCTURE_MARKER_COLORS.get(kind, (255, 255, 255))
+        if kind == structures.RUINS:
+            rect = pygame.Rect(x - 4, y - 4, 8, 8)
+            pygame.draw.rect(window, color, rect, 2)
+        elif kind == structures.UNDERGROUND_ROOM:
+            points = [(x, y - 5), (x + 5, y), (x, y + 5), (x - 5, y)]
+            pygame.draw.polygon(window, color, points)
+            pygame.draw.polygon(window, (20, 20, 24), points, 1)
+        else:  # HOUSE
+            rect = pygame.Rect(x - 4, y - 4, 8, 8)
+            pygame.draw.rect(window, color, rect)
+            pygame.draw.rect(window, (20, 20, 24), rect, 1)
+
+    def _draw_map_legend(self, window, start_x: int, center_y: int) -> None:
+        x = start_x
+        for kind, label in ((structures.HOUSE, "House"), (structures.RUINS, "Ruins"), (structures.UNDERGROUND_ROOM, "Cave Room")):
+            self._draw_map_structure_marker(window, kind, (x + 4, center_y))
+            text = self.font.render(label, True, (170, 170, 180))
+            window.blit(text, text.get_rect(midleft=(x + 14, center_y)))
+            x += 14 + text.get_width() + 18
 
     def _draw_npc_panel(self, window, player, npc, shop_open: bool) -> None:
         npc_def = npc.npc_def

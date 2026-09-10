@@ -107,6 +107,219 @@ def test_locked_recipe_is_not_craftable_via_the_click_path_even_with_ingredients
     assert crafting_system.has_ingredients(recipe, player.inventory) is True
 
 
+# --- Timed crafting (start_craft/update_pending_craft; the crafting
+# screen's click path uses this, not the instant craft()/craft_and_discover) ---
+
+def test_craft_time_scales_with_result_rarity():
+    from game.items.item import ItemRarity
+
+    common = recipe_registry.get("wood_plank_block")  # ItemRarity.COMMON
+    rare = recipe_registry.get("iron_armor")  # ItemRarity.RARE
+    epic = recipe_registry.get("arcane_pickaxe")  # ItemRarity.EPIC
+    assert item_registry.get(common.result_item_id).rarity == ItemRarity.COMMON
+    assert item_registry.get(rare.result_item_id).rarity == ItemRarity.RARE
+    assert item_registry.get(epic.result_item_id).rarity == ItemRarity.EPIC
+
+    assert crafting_system.craft_time_for(common) < crafting_system.craft_time_for(rare) < crafting_system.craft_time_for(epic)
+
+
+def test_start_craft_consumes_ingredients_immediately_and_creates_a_job():
+    world, player = _make_player()
+    player.inventory.add_item("wood", 5)
+    recipe = recipe_registry.get("wood_plank_block")  # 1 wood -> 4 planks
+
+    started = crafting_system.start_craft(recipe, player, world)
+
+    assert started is True
+    assert player.inventory.count_item("wood") == 4  # consumed immediately, like starting a smelt
+    assert player.inventory.count_item("wood_plank_block") == 0  # not granted yet
+    assert player.craft_job.recipe_id == "wood_plank_block"
+    assert player.craft_job.remaining_s == player.craft_job.total_s == crafting_system.craft_time_for(recipe)
+
+
+def test_start_craft_fails_without_ingredients():
+    world, player = _make_player()
+    recipe = recipe_registry.get("wood_plank_block")
+    assert crafting_system.start_craft(recipe, player, world) is False
+    assert player.craft_job is None
+
+
+def test_start_craft_fails_without_a_nearby_station():
+    world, player = _make_player()
+    player.inventory.add_item("wood", 10)
+    recipe = recipe_registry.get("wood_pickaxe")  # station_tile_id is None -- use a station recipe instead
+    stone_pickaxe = recipe_registry.get("stone_pickaxe")
+    player.inventory.add_item("stone_block", 10)
+    assert stone_pickaxe.station_tile_id is not None
+    assert crafting_system.start_craft(stone_pickaxe, player, world) is False
+    assert player.craft_job is None
+
+
+def test_start_craft_fails_while_a_different_craft_is_already_in_progress():
+    world, player = _make_player()
+    player.inventory.add_item("wood", 10)
+    first = recipe_registry.get("wood_plank_block")
+    crafting_system.start_craft(first, player, world)
+
+    second = recipe_registry.get("workbench")
+    assert crafting_system.start_craft(second, player, world) is False
+    assert player.craft_job.recipe_id == "wood_plank_block"  # unchanged
+
+
+def test_update_pending_craft_is_a_noop_before_the_timer_elapses():
+    world, player = _make_player()
+    player.inventory.add_item("wood", 5)
+    recipe = recipe_registry.get("wood_plank_block")
+    crafting_system.start_craft(recipe, player, world)
+
+    finished, newly_discovered = crafting_system.update_pending_craft(player, dt=0.001)
+    assert finished is None
+    assert newly_discovered == []
+    assert player.craft_job is not None
+    assert player.inventory.count_item("wood_plank_block") == 0
+
+
+def test_update_pending_craft_grants_the_result_xp_and_discovery_once_its_timer_elapses():
+    world, player = _make_player()
+    player.inventory.add_item("wood", 5)
+    recipe = recipe_registry.get("wood_plank_block")
+    crafting_system.start_craft(recipe, player, world)
+    start_xp = player.skills.xp("crafting")
+
+    finished = None
+    newly_discovered = []
+    for _ in range(50):
+        finished, newly_discovered = crafting_system.update_pending_craft(player, dt=0.1)
+        if finished is not None:
+            break
+
+    assert finished is recipe
+    assert player.craft_job is None
+    assert player.inventory.count_item("wood_plank_block") == 4
+    assert "wood_plank_block" in player.discovered_item_ids
+    assert player.skills.xp("crafting") > start_xp
+    assert isinstance(newly_discovered, list)
+
+
+def test_update_pending_craft_rolls_resourceful_refund_when_node_unlocked():
+    from game.skills import xp_table
+
+    world, player = _make_player()
+    player.skills.add_xp("crafting", xp_table.LEVEL_XP_TABLE[30])
+    player.skills.try_unlock_node("crafting_resourceful")
+    recipe = recipe_registry.get("wood_plank_block")  # (("wood", 1),) -> 4 planks
+
+    import random
+    random.seed(1)  # deterministic: refunds within the loop below (same seed test_crafting_resourceful_node_can_refund_an_ingredient uses)
+    refunded_at_least_once = False
+    for _ in range(50):
+        current_wood = player.inventory.count_item("wood")
+        if current_wood > 0:
+            player.inventory.remove_item("wood", current_wood)
+        player.inventory.add_item("wood", 1)
+
+        assert crafting_system.start_craft(recipe, player, world) is True
+        for _ in range(50):
+            finished, _ = crafting_system.update_pending_craft(player, dt=0.1)
+            if finished is not None:
+                break
+        if player.inventory.count_item("wood") > 0:
+            refunded_at_least_once = True
+
+    assert refunded_at_least_once
+
+
+def test_crafting_click_starts_a_timed_job_instead_of_granting_instantly():
+    """The crafting screen's click path (InputHandler) uses the timed
+    start_craft, not the instant craft_and_discover -- clicking a ready
+    recipe should NOT grant the result right away."""
+    from game.input.input_handler import InputHandler
+    from game.rendering.renderer import _crafting_layout
+
+    world, player = _make_player()
+    player.inventory.add_item("wood", 5)
+    player.collect_item("wood", 0)  # marks "wood" discovered without changing the count above
+
+    recipe_id = "wood_plank_block"
+    cell_rect = next(rect for r, rect in _crafting_layout(0, player.discovered_item_ids) if r.id == recipe_id)
+
+    class _FakeCraftingGameApp:
+        def __init__(self):
+            self.player = player
+            self.world = world
+            self.crafting_scroll_y = 0
+            self.furnace_manager = FurnaceManager()
+            self.notifications = NotificationQueue()
+
+    app = _FakeCraftingGameApp()
+    InputHandler()._handle_crafting_click(cell_rect.center, app)
+
+    assert player.craft_job is not None
+    assert player.craft_job.recipe_id == recipe_id
+    assert player.inventory.count_item("wood_plank_block") == 0  # not instant
+
+
+def test_crafting_click_on_a_different_recipe_while_busy_does_not_cancel_the_job():
+    from game.input.input_handler import InputHandler
+    from game.rendering.renderer import _crafting_layout
+
+    world, player = _make_player()
+    player.inventory.add_item("wood", 10)
+    player.collect_item("wood", 0)
+
+    first_recipe = recipe_registry.get("wood_plank_block")
+    crafting_system.start_craft(first_recipe, player, world)
+
+    second_rect = next(rect for r, rect in _crafting_layout(0, player.discovered_item_ids) if r.id == "workbench")
+
+    class _FakeCraftingGameApp:
+        def __init__(self):
+            self.player = player
+            self.world = world
+            self.crafting_scroll_y = 0
+            self.furnace_manager = FurnaceManager()
+            self.notifications = NotificationQueue()
+
+    app = _FakeCraftingGameApp()
+    InputHandler()._handle_crafting_click(second_rect.center, app)
+    app.notifications.update(dt=0.0)  # pop the queued message into current_text
+
+    assert player.craft_job.recipe_id == "wood_plank_block"  # still the original job
+    assert app.notifications.current_text == "Already crafting something else"
+
+
+def test_game_app_grants_the_craft_announces_it_and_spawns_confetti():
+    """End-to-end through the real GameApp.step loop (not just the
+    underlying crafting_system functions) -- catches wiring mistakes in
+    _update_crafting the unit tests above wouldn't (wrong notification
+    text, forgetting to spawn the completion effect, double-granting the
+    item by also routing it through _collect_and_announce)."""
+    from game.core.game_app import GameApp
+
+    app = GameApp(seed=DEFAULT_SEED)
+    try:
+        app.title_open = False
+        app.character_select_open = False
+        app.class_select_open = False
+        app.player.inventory.add_item("wood", 5)
+        recipe = recipe_registry.get("wood_plank_block")
+        assert crafting_system.start_craft(recipe, app.player, app.world) is True
+        planks_before = app.player.inventory.count_item("wood_plank_block")
+        particles_before = len(app.particles.particles)
+
+        for _ in range(60):  # well over craft_time_for(recipe) at 1/60s steps
+            app.step(dt=1 / 60)
+            if app.player.craft_job is None:
+                break
+
+        assert app.player.craft_job is None
+        assert app.player.inventory.count_item("wood_plank_block") == planks_before + recipe.result_quantity
+        assert len(app.particles.particles) > particles_before  # the confetti burst
+        assert app.notifications.current_text is not None and "Wood Plank" in app.notifications.current_text
+    finally:
+        pygame.quit()
+
+
 # --- Blocked-mining message ---
 
 def test_blocked_mining_reason_none_for_hand_breakable_tile():

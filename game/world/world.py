@@ -18,6 +18,9 @@ from game.world.world_generator import generate_column, generate_hazard_anchor
 from game.world import tile_registry
 from game.world.tile_registry import AIR_ID
 from game.world.hazard_feature import HazardAnchor
+from game.world import loot_chest
+from game.world import exploration
+from game.inventory.inventory import Inventory
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,58 @@ class World:
         self._crumble_stand_pos: Optional[Tuple[int, int]] = None
         self._crumble_stand_time = 0.0
         self._crumble_pending: Dict[Tuple[int, int], float] = {}
+        # World-generated loot Chests (see game/world/loot_chest.py): only
+        # populated for chests that have actually been opened at least
+        # once -- an untouched chest re-derives the same roll on demand,
+        # so there's nothing to store for it ahead of time.
+        self.chest_loot: Dict[Tuple[int, int], Inventory] = {}
+        # Fog-of-war Map data (see game/world/exploration.py): cell ->
+        # its sampled RGB color, populated as the player walks around.
+        self.explored_cells: Dict[Tuple[int, int], Tuple[int, int, int]] = {}
+        # Edits belonging to a chunk that's since been unloaded (see
+        # _unload_far_chunks) -- chunk_x -> its diff against the
+        # procedural baseline, in the same (local_x, y, tile_id) shape
+        # save_system uses. Without this, a chunk's edits (mining,
+        # building, a placed Furnace/Personal Chest/Torch/Checkpoint)
+        # vanished the moment the player wandered CHUNK_UNLOAD_RADIUS
+        # chunks away -- not just from live memory, but from any save
+        # made afterward too, since serialize() only ever looked at
+        # world.chunks, which no longer had the chunk in it at all.
+        self._unloaded_chunk_diffs: Dict[int, list] = {}
+
+    def chunk_diff(self, chunk_x: int, chunk: Chunk) -> list:
+        """(local_x, y, tile_id) triples for every tile in this chunk that
+        differs from the procedural baseline -- generate_column is a cheap
+        pure function of (seed, x), so recomputing it here to diff against
+        is fine, the same cost already paid every chunk load/unload.
+        Shared by save_system.serialize (for currently-loaded chunks) and
+        _unload_far_chunks (to preserve a chunk's edits past unloading)."""
+        diff = []
+        base_x = chunk_x * CHUNK_WIDTH
+        for local_x in range(CHUNK_WIDTH):
+            world_x = base_x + local_x
+            if world_x >= WORLD_WIDTH_TILES:
+                break
+            baseline = generate_column(self.seed, world_x)
+            live = chunk.tiles[local_x]
+            for y, tile_id in enumerate(live):
+                if tile_id != baseline[y]:
+                    diff.append((local_x, y, tile_id))
+        return diff
+
+    def reveal_map_around(self, center_x_px: float, center_y_px: float) -> None:
+        exploration.reveal_around(self, center_x_px, center_y_px)
+
+    def get_chest_inventory(self, tile_x: int, tile_y: int) -> Inventory:
+        """Returns the given Chest tile's loot -- rolled once, the first
+        time this is called for that position, then the same Inventory
+        instance on every later call, so items taken out stay taken."""
+        key = (tile_x, tile_y)
+        inventory = self.chest_loot.get(key)
+        if inventory is None:
+            inventory = loot_chest.roll_chest_loot(self.seed, tile_x, tile_y)
+            self.chest_loot[key] = inventory
+        return inventory
 
     def update(self, dt: float) -> None:
         self.elapsed_s += dt
@@ -62,6 +117,15 @@ class World:
                 anchor = generate_hazard_anchor(self.seed, world_x)
                 if anchor is not None:
                     chunk.hazards.append(anchor)
+            # Re-apply this chunk's own past edits, if it's been unloaded
+            # and regenerated before (see _unload_far_chunks) -- otherwise
+            # a player wandering back to a spot they'd already built on
+            # would find their edits silently reverted to the raw baseline.
+            diff = self._unloaded_chunk_diffs.pop(chunk_x, None)
+            if diff is not None:
+                for local_x, y, tile_id in diff:
+                    chunk.tiles[local_x][y] = tile_id
+                chunk.dirty = True
             self.chunks[chunk_x] = chunk
             logger.debug("Generated chunk %d", chunk_x)
         return chunk
@@ -81,9 +145,11 @@ class World:
             if abs(cx - center_chunk_x) > CHUNK_UNLOAD_RADIUS
         ]
         for cx in to_unload:
-            # Phase 1 has no SaveSystem yet, so modified chunks that get
-            # unloaded lose their edits. Documented as a known limitation
-            # in TODO.md until Phase 7's persistence work lands.
+            chunk = self.chunks[cx]
+            if chunk.dirty:
+                # Preserve the edits past this unload -- see
+                # _unloaded_chunk_diffs' docstring in __init__.
+                self._unloaded_chunk_diffs[cx] = self.chunk_diff(cx, chunk)
             del self.chunks[cx]
 
     # --- tile access ---

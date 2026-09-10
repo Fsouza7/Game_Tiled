@@ -183,6 +183,26 @@ def test_undiscovered_recipes_are_left_out_of_every_section():
     assert sum(len(recipes) for _, recipes in sections_everything_discovered) > 0
 
 
+def test_crafting_panel_height_has_a_floor_with_nothing_discovered():
+    """Regression test: with zero recipes discovered (a brand-new run,
+    before mining anything), the panel used to shrink to barely more than
+    its title bar -- too short for the details panel's own "Hover a
+    recipe / for details" hint to fit inside it, so the hint text visibly
+    overflowed past the panel's bottom border."""
+    from game.rendering.renderer import crafting_panel_height, CRAFTING_MIN_PANEL_HEIGHT, CRAFTING_TITLE_HEIGHT
+
+    assert crafting_panel_height(discovered_item_ids=set()) == CRAFTING_MIN_PANEL_HEIGHT
+    assert CRAFTING_MIN_PANEL_HEIGHT - CRAFTING_TITLE_HEIGHT >= 60  # room for two lines of hint text plus padding
+
+
+def test_crafting_panel_height_still_grows_for_a_lot_of_discovered_content():
+    from game.rendering.renderer import crafting_panel_height, CRAFTING_MIN_PANEL_HEIGHT, CRAFTING_VIEWPORT_HEIGHT, CRAFTING_TITLE_HEIGHT
+
+    height = crafting_panel_height(discovered_item_ids=_every_item_id())
+    assert height > CRAFTING_MIN_PANEL_HEIGHT  # the floor doesn't cap a panel that has real content
+    assert height <= CRAFTING_TITLE_HEIGHT + CRAFTING_VIEWPORT_HEIGHT  # still respects the scroll-viewport ceiling
+
+
 def test_recipes_are_grouped_by_result_category_with_a_trailing_smelting_section():
     from game.rendering.renderer import _recipe_sections, _CATEGORY_SECTION_ORDER
     from game.crafting import smelt_registry

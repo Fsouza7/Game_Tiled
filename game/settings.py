@@ -7,6 +7,9 @@ WINDOW_HEIGHT = 768
 FPS = 60
 WINDOW_TITLE = "Sandbox Prototype"
 
+# --- Audio ---
+MUSIC_VOLUME = 0.4
+
 # --- World / Tiles ---
 TILE_SIZE = 32
 CHUNK_WIDTH = 32  # tiles per chunk (columns)
@@ -56,7 +59,17 @@ PLAYER_HEIGHT_TILES = 1.8
 PLAYER_MAX_HEALTH = 100
 PLAYER_REACH_TILES = 6.0
 PLAYER_PLACE_COOLDOWN_S = 0.15
-PLAYER_MINE_TICK_S = 0.05
+# One "hit" of mining_power is applied every this many seconds while the
+# mine button is held (see Player.try_mine) -- the real lever on how much
+# a block resists being mined, since ticks-to-break = ceil(resistance /
+# mining_power) regardless of this value. At the old 0.05s, even a bare
+# hand cleared dirt in a single, imperceptible tick and the wood->stone->
+# iron->steel->arcane pickaxe ladder made almost no felt difference on
+# everyday blocks. 0.2s keeps digging brisk (a plain dirt/stone block is
+# still 1-2 ticks) while giving the tool tier a real, feelable payoff on
+# tougher tool-gated material (ore/gems can take several ticks with the
+# starter pickaxe, one tick with a late-game one).
+PLAYER_MINE_TICK_S = 0.2
 
 # --- Grapple Hook (accessory slot) ---
 GRAPPLE_MAX_RANGE_TILES = 7.0
@@ -77,6 +90,13 @@ CAMERA_DEFAULT_ZOOM = 1.0
 CAMERA_MIN_ZOOM = 0.5
 CAMERA_MAX_ZOOM = 2.0
 CAMERA_ZOOM_STEP = 0.1
+# Screen shake on the player taking damage (see Camera.shake) -- scaled by
+# the hit's own damage amount so a Duskwing peck barely nudges the screen
+# but the Slime King's stomp reads as a real jolt, without needing a
+# separate "this one's special" signal from combat_system.
+CAMERA_HIT_SHAKE_DURATION_S = 0.15
+CAMERA_HIT_SHAKE_PX_PER_DAMAGE = 0.3
+CAMERA_HIT_SHAKE_MAX_PX = 7.0
 
 # --- Rendering ---
 PLAYER_ANIMATION_FRAME_DELAY = 4  # render-frames per animation frame
@@ -172,6 +192,20 @@ DEFAULT_STACK_SIZE = 99
 # Shared stash accessed from any placed Personal Chest (piggy-bank /
 # ender-chest style -- contents follow the player, not the tile).
 PERSONAL_CHEST_SLOTS = 20
+# World-generated loot Chest (found in structures -- Houses, Ruins,
+# Underground Rooms): each one gets its own small, one-time random loot
+# roll instead of a shared stash. See game/world/loot_chest.py.
+LOOT_CHEST_SLOTS = 10
+LOOT_CHEST_MIN_ROLLS = 2
+LOOT_CHEST_MAX_ROLLS = 4
+
+# --- Map (fog-of-war, M to open) ---
+# The world is divided into MAP_CELL_SIZE_TILES x MAP_CELL_SIZE_TILES
+# cells; a cell is "explored" (and gets a fixed representative color,
+# sampled once) the first time the player comes within
+# MAP_REVEAL_RADIUS_TILES of it. See game/world/exploration.py.
+MAP_CELL_SIZE_TILES = 8
+MAP_REVEAL_RADIUS_TILES = 40
 
 # --- World clock (day/night) ---
 DAY_LENGTH_S = 600.0  # one full day+night cycle, real seconds
@@ -255,6 +289,8 @@ PARTICLE_DUST_LIFETIME_S = 0.4
 PARTICLE_DUST_STEP_INTERVAL_S = 0.28  # min gap between footstep puffs while running on ground
 PARTICLE_CONFETTI_LIFETIME_S = 1.1
 PARTICLE_CONFETTI_COUNT = 26
+PARTICLE_HIT_SPARK_LIFETIME_S = 0.22
+PARTICLE_HIT_SPARK_COUNT = 6
 
 # --- Furnace / smelting ---
 SMELT_TIME_IRON_S = 4.0

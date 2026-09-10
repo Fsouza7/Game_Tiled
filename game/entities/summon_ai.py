@@ -72,5 +72,12 @@ def update(summon: Summon, world, player, enemies, dt: float) -> None:
             summon.y_vel = dy * 0.1
             summon.facing_right = dx >= 0
 
+    if summon.x_vel != 0 and tile_collision.is_solid_ahead(summon, world, 1 if summon.x_vel > 0 else -1):
+        # No wall-routing logic (see module docstring) -- rather than
+        # pressing straight into a ledge/wall it can't get around (this is
+        # what made the summon look "stuck" on uneven terrain), rise up
+        # and over it like it would any other obstacle.
+        summon.y_vel = -abs(summon.move_speed)
+
     tile_collision.move_axis(summon, world, summon.x_vel, horizontal=True)
     tile_collision.move_axis(summon, world, summon.y_vel, horizontal=False)
