@@ -96,11 +96,11 @@ class Player(Entity):
 
     # --- input-facing intent ---
     def move_left(self) -> None:
-        self.x_vel = -PLAYER_MOVE_SPEED
+        self.x_vel = -(PLAYER_MOVE_SPEED + self.equipment.total_move_speed_bonus())
         self.facing_right = False
 
     def move_right(self) -> None:
-        self.x_vel = PLAYER_MOVE_SPEED
+        self.x_vel = PLAYER_MOVE_SPEED + self.equipment.total_move_speed_bonus()
         self.facing_right = True
 
     def stop_horizontal(self) -> None:

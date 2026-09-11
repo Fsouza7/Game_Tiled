@@ -51,9 +51,19 @@ def test_class_registry_has_warrior_and_summoner():
 
 
 def test_summon_registry_has_both_tiers():
+    # Itemization pass added more tiers above iron_guardian -- steel_colossus
+    # (Steel), arcane_familiar (Arcane) and void_wraith (endgame, see
+    # summon_registry.py) -- so this only checks the original two are still
+    # present and damage-ordered against the newer tiers, not a closed set.
     summons = {s.id: s for s in summon_registry.all_summons()}
-    assert set(summons) == {"twig_sprite", "iron_guardian"}
+    assert {"twig_sprite", "iron_guardian"} <= set(summons)
     assert summons["iron_guardian"].damage > summons["twig_sprite"].damage
+    if "steel_colossus" in summons:
+        assert summons["steel_colossus"].damage > summons["iron_guardian"].damage
+    if "arcane_familiar" in summons:
+        assert summons["arcane_familiar"].damage > summons["iron_guardian"].damage
+    if "void_wraith" in summons:
+        assert summons["void_wraith"].damage > summons["iron_guardian"].damage
 
 
 def test_summon_rod_items_reference_real_summons():

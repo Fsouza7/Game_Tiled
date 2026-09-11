@@ -23,6 +23,7 @@ _register(NpcDef(
     id="guide",
     name="Guide",
     color=(80, 175, 110),
+    sprite_character_id="mask_dude",
     spawn_condition="always",
     dialogue=(
         "Welcome. I'm the Guide -- I'll keep this short.",
@@ -38,6 +39,7 @@ _register(NpcDef(
     id="merchant",
     name="Merchant",
     color=(220, 175, 55),
+    sprite_character_id="pink_man",
     spawn_condition="wealth",
     dialogue=(
         "Got coin? I've got supplies. Click Shop to browse.",
@@ -49,6 +51,7 @@ _register(NpcDef(
         ShopOffer(item_id="arrow", price=3),
         ShopOffer(item_id="apple", price=6),
         ShopOffer(item_id="wood", price=4),
+        ShopOffer(item_id="healing_potion", price=14),  # value 8; markup so buy-then-sell can't print coins
     ),
 ))
 
@@ -56,6 +59,7 @@ _register(NpcDef(
     id="blacksmith",
     name="Blacksmith",
     color=(160, 95, 70),
+    sprite_character_id="virtual_guy",
     spawn_condition="discovered_item",
     spawn_item_id="iron_bar",
     dialogue=(
@@ -70,6 +74,7 @@ _register(NpcDef(
         ShopOffer(item_id="wood_greaves", price=36),
         ShopOffer(item_id="iron_pickaxe", price=90),
         ShopOffer(item_id="steel_pickaxe", price=140),
+        ShopOffer(item_id="cactus_jerkin", price=60),  # value 36; desert body piece between wood and iron
     ),
 ))
 

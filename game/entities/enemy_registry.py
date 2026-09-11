@@ -5,7 +5,7 @@ from typing import Dict, List
 
 from game.entities.enemy_def import EnemyDef, AIType, SpawnTime
 from game.settings import SLIME_KING_MAX_HEALTH, SLIME_KING_CONTACT_DAMAGE, SLIME_KING_MOVE_SPEED, SLIME_KING_WIDTH_TILES, SLIME_KING_HEIGHT_TILES
-from game.world.biome_registry import DESERT_ID
+from game.world.biome_registry import DESERT_ID, SNOW_ID, JUNGLE_ID
 
 _ENEMIES: Dict[str, EnemyDef] = {}
 
@@ -50,6 +50,27 @@ _register(EnemyDef(
     width_tiles=0.9, height_tiles=0.6, color=(200, 150, 60),
     spawn_weight=0.4, biome_id=DESERT_ID,
     drop_item_id="cactus_fiber", drop_chance=0.5, drop_min=1, drop_max=2,
+))
+
+# Snow/Jungle exclusives close the Phase 6 gap where only Desert had a
+# unique enemy. Stats sit next to slime/duskwing so they don't outclass
+# the universal roster, just give each biome something of its own to farm.
+_register(EnemyDef(
+    id="frost_hopper", name="Frost Hopper",
+    ai_type=AIType.HOP,
+    max_health=24.0, contact_damage=9.0, move_speed=4.5,
+    width_tiles=0.8, height_tiles=0.6, color=(140, 210, 240),
+    spawn_weight=0.4, spawn_time=SpawnTime.ANY, biome_id=SNOW_ID,
+    drop_item_id="frost_shard", drop_chance=0.6, drop_min=1, drop_max=2,
+))
+
+_register(EnemyDef(
+    id="swamp_mosquito", name="Swamp Mosquito",
+    ai_type=AIType.FLY,
+    max_health=18.0, contact_damage=8.0, move_speed=6.0,
+    width_tiles=0.8, height_tiles=0.6, color=(90, 160, 70),
+    spawn_weight=0.4, spawn_time=SpawnTime.ANY, biome_id=JUNGLE_ID,
+    drop_item_id="mosquito_wing", drop_chance=0.6, drop_min=1, drop_max=2,
 ))
 
 

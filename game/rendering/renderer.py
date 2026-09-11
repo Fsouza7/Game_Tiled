@@ -32,10 +32,14 @@ from game.rendering.particles import DUST, CONFETTI, HIT_SPARK
 from game.crafting import recipe_registry, crafting_system, smelt_registry
 from game.crafting.recipe import RecipeDef
 from game.crafting.smelt_recipe import SmeltRecipeDef
-from game.crafting.furnace_system import nearest_station_tile as _nearest_station_tile
+from game.crafting.furnace_system import (
+    nearest_station_tile as _nearest_station_tile,
+    FURNACE_FUEL_SLOT, FURNACE_ORE_SLOT,
+)
 from game.entities.enemy_def import AIType
-from game.entities import character_registry, class_registry
+from game.entities import character_registry, class_registry, summon_registry
 from game.combat import combat_system
+from game.combat.combat_system import SUMMON_WEAPON_CLASS
 from game.skills.skills import SKILL_IDS, SKILL_NAMES
 from game.skills import skill_tree_registry
 from game.npcs.npc_spawner import nearest_in_range
@@ -86,23 +90,38 @@ _SKILL_ABBREVIATIONS = {
 # mouse clicks against the exact same geometry used to draw it. A grid of
 # icon cells (discovered recipes only -- locked ones don't appear at all,
 # see _recipe_sections) on the left, a fixed details panel for whichever
-# cell is hovered on the right (see _draw_recipe_details).
-CRAFTING_GRID_COLUMNS = 5
-CRAFTING_CELL_SIZE = 54
+# cell is hovered on the right (see _draw_recipe_details), and a filter
+# bar (rarity tabs + a "Craftable now" toggle, see _draw_crafting_filter_bar)
+# across the top of the grid.
+#
+# Sized generously (7 columns, a tall viewport) -- user feedback: the
+# original 5-column/460px-tall layout felt cramped and confusing once
+# more than a couple sections were discovered. The furnace's own smelting
+# recipes no longer share this screen at all (see FURNACE_* below /
+# "How the Furnace queue works" in README) -- one screen, one job.
+CRAFTING_GRID_COLUMNS = 7
+CRAFTING_CELL_SIZE = 56
 CRAFTING_CELL_GAP = 10
 CRAFTING_GRID_WIDTH = CRAFTING_GRID_COLUMNS * CRAFTING_CELL_SIZE + (CRAFTING_GRID_COLUMNS - 1) * CRAFTING_CELL_GAP
-CRAFTING_DETAILS_WIDTH = 210
+CRAFTING_DETAILS_WIDTH = 260
 CRAFTING_PANEL_PADDING = 14
 CRAFTING_DIVIDER_GAP = 18
 CRAFTING_PANEL_WIDTH = CRAFTING_PANEL_PADDING * 2 + CRAFTING_GRID_WIDTH + CRAFTING_DIVIDER_GAP + CRAFTING_DETAILS_WIDTH
 CRAFTING_SECTION_HEADER_HEIGHT = 24
 CRAFTING_SECTION_GAP = 8
 CRAFTING_PANEL_X = (WINDOW_WIDTH - CRAFTING_PANEL_WIDTH) // 2
-CRAFTING_PANEL_Y = 70
+CRAFTING_PANEL_Y = 46
 CRAFTING_TITLE_HEIGHT = 38
+# Rarity tabs ("All"/Common/Uncommon/Rare/Epic) + the "Craftable now"
+# toggle live in their own row between the title bar and the grid.
+CRAFTING_FILTER_BAR_HEIGHT = 34
+CRAFTING_FILTER_TAB_WIDTH = 78
+CRAFTING_FILTER_TAB_HEIGHT = 22
+CRAFTING_FILTER_TAB_GAP = 6
+CRAFTING_CRAFTABLE_TOGGLE_WIDTH = 140
 # The grid scrolls once content exceeds this, so the panel never grows
 # into the hotbar/health HUD as more recipes are added over time.
-CRAFTING_VIEWPORT_HEIGHT = 460
+CRAFTING_VIEWPORT_HEIGHT = 560
 CRAFTING_SCROLL_STEP = CRAFTING_CELL_SIZE + CRAFTING_CELL_GAP
 # A floor under crafting_panel_height (below): with very few (or, at the
 # very start of a run, zero) recipes discovered yet, the content-fit
@@ -115,9 +134,6 @@ CRAFTING_MIN_PANEL_HEIGHT = CRAFTING_TITLE_HEIGHT + 160
 # Primary grouping is by what the result *is* (a category a player
 # recognizes at a glance), not where it's crafted -- each cell still shows
 # its own station requirement in the details panel (see _station_label).
-# Smelt recipes (furnace) get their own trailing section since the whole
-# interaction (start a timed job, come back later) differs from an
-# instant craft even though they share this screen's layout/discovery code.
 _CATEGORY_SECTION_ORDER = (
     (ItemCategory.BLOCK, "Building"),
     (ItemCategory.DECORATION, "Structures & Utility"),
@@ -129,6 +145,17 @@ _CATEGORY_SECTION_ORDER = (
     (ItemCategory.MATERIAL, "Materials"),
 )
 
+# Rarity filter tabs -- None stands for "All" (every rarity), not "no
+# filter selected" as a separate concept, so a sentinel (NO_TAB_HIT below)
+# is needed wherever "the click didn't land on any tab" must be
+# distinguished from "it landed on the All tab".
+CRAFTING_RARITY_TABS = (None, ItemRarity.COMMON, ItemRarity.UNCOMMON, ItemRarity.RARE, ItemRarity.EPIC)
+_RARITY_TAB_LABELS = {
+    None: "All", ItemRarity.COMMON: "Common", ItemRarity.UNCOMMON: "Uncommon",
+    ItemRarity.RARE: "Rare", ItemRarity.EPIC: "Epic",
+}
+NO_TAB_HIT = "no-tab-hit"
+
 
 def _station_label(station_tile_id) -> str:
     if station_tile_id is None:
@@ -136,36 +163,48 @@ def _station_label(station_tile_id) -> str:
     return tile_registry.get(station_tile_id).name
 
 
-def _recipe_sections(discovered_item_ids):
+def _recipe_matches_filters(recipe, rarity_filter, craftable_only: bool, player, world) -> bool:
+    if rarity_filter is not None and item_registry.get(recipe.result_item_id).rarity != rarity_filter:
+        return False
+    if craftable_only and player is not None and world is not None:
+        has_ingredients = crafting_system.has_ingredients(recipe, player.inventory)
+        near_station = recipe.station_tile_id is None or crafting_system.is_near_station(
+            world, player.center_x, player.center_y, recipe.station_tile_id,
+        )
+        if not (has_ingredients and near_station):
+            return False
+    return True
+
+
+def _recipe_sections(discovered_item_ids, rarity_filter=None, craftable_only: bool = False, player=None, world=None):
     """Returns [(section_title, [recipes])] grouped by the crafted item's
-    category, in a fixed, predictable order, with smelting recipes as
-    their own trailing section. Undiscovered recipes (see
-    crafting_system.is_recipe_discovered) are left out entirely -- a
-    section with nothing discovered in it doesn't appear either."""
+    category, in a fixed, predictable order. Undiscovered recipes (see
+    crafting_system.is_recipe_discovered) are left out entirely, as is
+    anything the current rarity tab / "Craftable now" toggle excludes
+    (see _recipe_matches_filters) -- a section with nothing left in it
+    doesn't appear either."""
     sections = []
     for category, title in _CATEGORY_SECTION_ORDER:
         recipes = [
             r for r in recipe_registry.all_recipes()
             if item_registry.get(r.result_item_id).category == category
             and crafting_system.is_recipe_discovered(r, discovered_item_ids)
+            and _recipe_matches_filters(r, rarity_filter, craftable_only, player, world)
         ]
         if recipes:
             sections.append((title, recipes))
-    smelt_recipes = [r for r in smelt_registry.all_recipes() if crafting_system.is_recipe_discovered(r, discovered_item_ids)]
-    if smelt_recipes:
-        sections.append(("Smelting (Furnace)", smelt_recipes))
     return sections
 
 
-def _crafting_layout(scroll_y, discovered_item_ids):
-    """Yields (recipe, cell_rect) for every discovered recipe in on-screen
-    grid order (left to right, wrapping every CRAFTING_GRID_COLUMNS),
-    accounting for section headers and the current scroll offset -- the
-    single source of truth for drawing, click hit-testing and hover
-    (details-panel) lookup alike."""
+def _crafting_layout(scroll_y, discovered_item_ids, rarity_filter=None, craftable_only: bool = False, player=None, world=None):
+    """Yields (recipe, cell_rect) for every discovered, filter-matching
+    recipe in on-screen grid order (left to right, wrapping every
+    CRAFTING_GRID_COLUMNS), accounting for section headers and the
+    current scroll offset -- the single source of truth for drawing,
+    click hit-testing and hover (details-panel) lookup alike."""
     grid_x = CRAFTING_PANEL_X + CRAFTING_PANEL_PADDING
-    y = CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT - scroll_y
-    for title, recipes in _recipe_sections(discovered_item_ids):
+    y = CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT + CRAFTING_FILTER_BAR_HEIGHT - scroll_y
+    for title, recipes in _recipe_sections(discovered_item_ids, rarity_filter, craftable_only, player, world):
         if not recipes:
             continue
         y += CRAFTING_SECTION_HEADER_HEIGHT
@@ -183,34 +222,65 @@ def _crafting_layout(scroll_y, discovered_item_ids):
         y += CRAFTING_SECTION_GAP
 
 
-def crafting_content_height(discovered_item_ids) -> int:
+def crafting_content_height(discovered_item_ids, rarity_filter=None, craftable_only: bool = False, player=None, world=None) -> int:
     """Total height of the recipe grid content, unscrolled/unclipped."""
-    last_bottom = CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT
-    for _, rect in _crafting_layout(0, discovered_item_ids):
+    last_bottom = CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT + CRAFTING_FILTER_BAR_HEIGHT
+    for _, rect in _crafting_layout(0, discovered_item_ids, rarity_filter, craftable_only, player, world):
         last_bottom = max(last_bottom, rect.bottom)
     return last_bottom - CRAFTING_PANEL_Y + 12
 
 
-def crafting_panel_height(discovered_item_ids) -> int:
-    fitted = min(crafting_content_height(discovered_item_ids), CRAFTING_TITLE_HEIGHT + CRAFTING_VIEWPORT_HEIGHT)
+def crafting_panel_height(discovered_item_ids, rarity_filter=None, craftable_only: bool = False, player=None, world=None) -> int:
+    fitted = min(
+        crafting_content_height(discovered_item_ids, rarity_filter, craftable_only, player, world),
+        CRAFTING_TITLE_HEIGHT + CRAFTING_FILTER_BAR_HEIGHT + CRAFTING_VIEWPORT_HEIGHT,
+    )
     return max(fitted, CRAFTING_MIN_PANEL_HEIGHT)
 
 
-def crafting_max_scroll(discovered_item_ids) -> int:
-    return max(0, crafting_content_height(discovered_item_ids) - crafting_panel_height(discovered_item_ids))
+def crafting_max_scroll(discovered_item_ids, rarity_filter=None, craftable_only: bool = False, player=None, world=None) -> int:
+    content = crafting_content_height(discovered_item_ids, rarity_filter, craftable_only, player, world)
+    panel = crafting_panel_height(discovered_item_ids, rarity_filter, craftable_only, player, world)
+    return max(0, content - panel)
 
 
-def recipe_at_screen_pos(pos, scroll_y, discovered_item_ids):
+def recipe_at_screen_pos(pos, scroll_y, discovered_item_ids, rarity_filter=None, craftable_only: bool = False, player=None, world=None):
     viewport = pygame.Rect(
-        CRAFTING_PANEL_X, CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT,
-        CRAFTING_PANEL_PADDING + CRAFTING_GRID_WIDTH, crafting_panel_height(discovered_item_ids) - CRAFTING_TITLE_HEIGHT,
+        CRAFTING_PANEL_X, CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT + CRAFTING_FILTER_BAR_HEIGHT,
+        CRAFTING_PANEL_PADDING + CRAFTING_GRID_WIDTH,
+        crafting_panel_height(discovered_item_ids, rarity_filter, craftable_only, player, world) - CRAFTING_TITLE_HEIGHT - CRAFTING_FILTER_BAR_HEIGHT,
     )
     if not viewport.collidepoint(pos):
         return None
-    for recipe, rect in _crafting_layout(scroll_y, discovered_item_ids):
+    for recipe, rect in _crafting_layout(scroll_y, discovered_item_ids, rarity_filter, craftable_only, player, world):
         if rect.collidepoint(pos):
             return recipe
     return None
+
+
+def _crafting_rarity_tab_rect(index: int) -> pygame.Rect:
+    x = CRAFTING_PANEL_X + CRAFTING_PANEL_PADDING + index * (CRAFTING_FILTER_TAB_WIDTH + CRAFTING_FILTER_TAB_GAP)
+    y = CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT + (CRAFTING_FILTER_BAR_HEIGHT - CRAFTING_FILTER_TAB_HEIGHT) // 2
+    return pygame.Rect(x, y, CRAFTING_FILTER_TAB_WIDTH, CRAFTING_FILTER_TAB_HEIGHT)
+
+
+def crafting_rarity_tab_at_screen_pos(pos):
+    """The rarity a filter-tab click hit (None means the "All" tab), or
+    NO_TAB_HIT if pos isn't over any tab."""
+    for index, rarity in enumerate(CRAFTING_RARITY_TABS):
+        if _crafting_rarity_tab_rect(index).collidepoint(pos):
+            return rarity
+    return NO_TAB_HIT
+
+
+def crafting_craftable_toggle_rect() -> pygame.Rect:
+    x = CRAFTING_PANEL_X + CRAFTING_PANEL_WIDTH - CRAFTING_PANEL_PADDING - CRAFTING_CRAFTABLE_TOGGLE_WIDTH
+    y = CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT + (CRAFTING_FILTER_BAR_HEIGHT - CRAFTING_FILTER_TAB_HEIGHT) // 2
+    return pygame.Rect(x, y, CRAFTING_CRAFTABLE_TOGGLE_WIDTH, CRAFTING_FILTER_TAB_HEIGHT)
+
+
+def crafting_craftable_toggle_at_screen_pos(pos) -> bool:
+    return crafting_craftable_toggle_rect().collidepoint(pos)
 
 
 # --- Inventory / equipment panel layout ---
@@ -398,10 +468,10 @@ def _pause_button_rects(actions) -> Dict[str, pygame.Rect]:
 
 # --- Settings sub-panel layout: a real panel (see _draw_panel_chrome) with
 # one row per adjustable value (Zoom / Music Volume / SFX Volume), each a
-# -/+ stepper around a live percentage, plus a Back button -- replacing
-# what used to be 3 bare buttons floating on the dark overlay. ---
-SETTINGS_PANEL_WIDTH = 460
-SETTINGS_PANEL_HEIGHT = 276
+# -/+ stepper around a live percentage, then a two-column Controls grid
+# of rebindable keys, plus Back / Reset Keys. ---
+SETTINGS_PANEL_WIDTH = 720
+SETTINGS_PANEL_HEIGHT = 548
 SETTINGS_TITLE_HEIGHT = 38
 SETTINGS_ROW_HEIGHT = 40
 SETTINGS_ROW_GAP = 8
@@ -409,6 +479,9 @@ SETTINGS_STEP_BUTTON_SIZE = 28
 SETTINGS_STEP_BUTTON_GAP = 66  # space between the -/+ buttons, where the value text sits
 SETTINGS_BACK_WIDTH = 130
 SETTINGS_BACK_HEIGHT = 36
+SETTINGS_BINDING_ROW_HEIGHT = 32
+SETTINGS_BINDING_KEY_WIDTH = 92
+SETTINGS_BINDING_COLS = 2
 
 # (row key, label, value formatter over (camera, music_volume, sfx_volume))
 # -- one source of truth shared by layout, hit-testing and drawing.
@@ -434,9 +507,56 @@ def settings_row_rect(index: int) -> pygame.Rect:
 def settings_back_button_rect() -> pygame.Rect:
     panel = settings_panel_rect()
     return pygame.Rect(
-        panel.centerx - SETTINGS_BACK_WIDTH // 2, panel.bottom - SETTINGS_BACK_HEIGHT - 16,
+        panel.centerx + 8, panel.bottom - SETTINGS_BACK_HEIGHT - 16,
         SETTINGS_BACK_WIDTH, SETTINGS_BACK_HEIGHT,
     )
+
+
+def settings_reset_bindings_rect() -> pygame.Rect:
+    panel = settings_panel_rect()
+    return pygame.Rect(
+        panel.centerx - SETTINGS_BACK_WIDTH - 8, panel.bottom - SETTINGS_BACK_HEIGHT - 16,
+        SETTINGS_BACK_WIDTH, SETTINGS_BACK_HEIGHT,
+    )
+
+
+def _settings_bindings_origin_y() -> int:
+    panel = settings_panel_rect()
+    volume_block = len(_SETTINGS_ROWS) * (SETTINGS_ROW_HEIGHT + SETTINGS_ROW_GAP)
+    return panel.y + SETTINGS_TITLE_HEIGHT + 20 + volume_block + 28
+
+
+def settings_binding_button_rect(index: int) -> pygame.Rect:
+    panel = settings_panel_rect()
+    col = index % SETTINGS_BINDING_COLS
+    row = index // SETTINGS_BINDING_COLS
+    col_width = (SETTINGS_PANEL_WIDTH - 50) // SETTINGS_BINDING_COLS
+    x = panel.x + 20 + col * col_width
+    y = _settings_bindings_origin_y() + row * (SETTINGS_BINDING_ROW_HEIGHT + 6)
+    return pygame.Rect(
+        x + col_width - SETTINGS_BINDING_KEY_WIDTH - 8, y,
+        SETTINGS_BINDING_KEY_WIDTH, SETTINGS_BINDING_ROW_HEIGHT,
+    )
+
+
+def settings_binding_label_rect(index: int) -> pygame.Rect:
+    panel = settings_panel_rect()
+    col = index % SETTINGS_BINDING_COLS
+    row = index // SETTINGS_BINDING_COLS
+    col_width = (SETTINGS_PANEL_WIDTH - 50) // SETTINGS_BINDING_COLS
+    x = panel.x + 20 + col * col_width
+    y = _settings_bindings_origin_y() + row * (SETTINGS_BINDING_ROW_HEIGHT + 6)
+    button = settings_binding_button_rect(index)
+    return pygame.Rect(x, y, button.x - x - 8, SETTINGS_BINDING_ROW_HEIGHT)
+
+
+def settings_binding_at_screen_pos(pos) -> Optional[str]:
+    from game.input.bindings import BINDABLE_ACTIONS
+
+    for index, (action_id, _label) in enumerate(BINDABLE_ACTIONS):
+        if settings_binding_button_rect(index).collidepoint(pos):
+            return action_id
+    return None
 
 
 def _settings_step_button_rects() -> Dict[str, pygame.Rect]:
@@ -463,12 +583,19 @@ def pause_button_at_screen_pos(pos, settings_open: bool) -> Optional[str]:
     for action, rect in pause_menu_button_rects(settings_open).items():
         if rect.collidepoint(pos):
             return action
+    if settings_open:
+        bind_action = settings_binding_at_screen_pos(pos)
+        if bind_action is not None:
+            return f"bind:{bind_action}"
+        if settings_reset_bindings_rect().collidepoint(pos):
+            return "reset_bindings"
     return None
 
 
 # --- NPC dialogue / shop panel layout ---
 NPC_PANEL_WIDTH = 700
-NPC_PANEL_HEIGHT = 460
+NPC_PANEL_HEIGHT = 520  # room for a 7th Blacksmith offer (cactus_jerkin) above Close
+
 NPC_PANEL_X = (WINDOW_WIDTH - NPC_PANEL_WIDTH) // 2
 NPC_PANEL_Y = (WINDOW_HEIGHT - NPC_PANEL_HEIGHT) // 2
 NPC_TITLE_HEIGHT = 38
@@ -582,6 +709,69 @@ def chest_storage_index_at_screen_pos(pos, slot_count: int) -> Optional[int]:
     return None
 
 
+# --- Furnace panel: its own screen (separate from Crafting -- see
+# "melhore o sistema de craft e fornalha" user feedback), opened by
+# clicking a placed Furnace tile (InputHandler._try_open_station_screen).
+# Two input slots (fuel, ore) feed a queue -- deposit a stack of each and
+# FurnaceManager.update keeps consuming one recipe's worth at a time on
+# its own (see furnace_system.py's module docstring); bars are granted
+# straight to the player's inventory as each batch finishes, same as
+# before, so there's no separate output slot to collect from. ---
+FURNACE_PANEL_WIDTH = 560
+FURNACE_PANEL_HEIGHT = 520
+FURNACE_PANEL_X = (WINDOW_WIDTH - FURNACE_PANEL_WIDTH) // 2
+FURNACE_PANEL_Y = (WINDOW_HEIGHT - FURNACE_PANEL_HEIGHT) // 2
+FURNACE_TITLE_HEIGHT = 38
+FURNACE_SLOT_SIZE = 56
+FURNACE_INPUT_GAP = 20
+FURNACE_BAG_COLS = 5
+FURNACE_BAG_SLOT_SIZE = 48
+FURNACE_BAG_GAP = 8
+
+
+def furnace_fuel_slot_rect() -> pygame.Rect:
+    x = FURNACE_PANEL_X + 50
+    y = FURNACE_PANEL_Y + FURNACE_TITLE_HEIGHT + 34
+    return pygame.Rect(x, y, FURNACE_SLOT_SIZE, FURNACE_SLOT_SIZE)
+
+
+def furnace_ore_slot_rect() -> pygame.Rect:
+    fuel_rect = furnace_fuel_slot_rect()
+    return pygame.Rect(fuel_rect.x, fuel_rect.bottom + FURNACE_INPUT_GAP, FURNACE_SLOT_SIZE, FURNACE_SLOT_SIZE)
+
+
+def furnace_result_icon_rect() -> pygame.Rect:
+    fuel_rect = furnace_fuel_slot_rect()
+    ore_rect = furnace_ore_slot_rect()
+    x = fuel_rect.right + 90
+    y = (fuel_rect.top + ore_rect.bottom) // 2 - FURNACE_SLOT_SIZE // 2
+    return pygame.Rect(x, y, FURNACE_SLOT_SIZE, FURNACE_SLOT_SIZE)
+
+
+def furnace_bag_slot_rect(index: int) -> pygame.Rect:
+    top = furnace_ore_slot_rect().bottom + 54
+    col = index % FURNACE_BAG_COLS
+    row = index // FURNACE_BAG_COLS
+    x = FURNACE_PANEL_X + 20 + col * (FURNACE_BAG_SLOT_SIZE + FURNACE_BAG_GAP)
+    y = top + row * (FURNACE_BAG_SLOT_SIZE + FURNACE_BAG_GAP)
+    return pygame.Rect(x, y, FURNACE_BAG_SLOT_SIZE, FURNACE_BAG_SLOT_SIZE)
+
+
+def furnace_bag_index_at_screen_pos(pos, slot_count: int) -> Optional[int]:
+    for index in range(slot_count):
+        if furnace_bag_slot_rect(index).collidepoint(pos):
+            return index
+    return None
+
+
+def furnace_fuel_slot_at_screen_pos(pos) -> bool:
+    return furnace_fuel_slot_rect().collidepoint(pos)
+
+
+def furnace_ore_slot_at_screen_pos(pos) -> bool:
+    return furnace_ore_slot_rect().collidepoint(pos)
+
+
 # --- Map screen: a scaled view of every explored fog-of-war cell ---
 MAP_PANEL_WIDTH = 760
 MAP_PANEL_HEIGHT = 500
@@ -685,6 +875,9 @@ class Renderer:
         damage_numbers=None, has_save: bool = False, chest_open: bool = False,
         enemy_projectiles=(), chest_storage=None, map_open: bool = False,
         prefs=None, sleep_fade_ratio: float = 0.0,
+        furnace_open: bool = False, furnace_pos=None,
+        crafting_filter_rarity=None, crafting_filter_craftable_only: bool = False,
+        rebinding_action=None,
     ) -> None:
         if title_open:
             self._draw_title_screen(window, has_save)
@@ -707,7 +900,7 @@ class Renderer:
         self._draw_mining_outline(window, world, player, camera)
         self._draw_enemies(window, world, enemies, camera, light_sources, ambient_light)
         self._draw_summons(window, summons, camera, light_sources, ambient_light)
-        self._draw_npcs(window, world, npcs, camera, light_sources, ambient_light)
+        self._draw_npcs(window, world, npcs, camera, light_sources, ambient_light, player)
         self._draw_projectiles(window, projectiles, camera)
         self._draw_enemy_projectiles(window, enemy_projectiles, camera)
         self._draw_player(window, world, player, camera, light_sources, ambient_light)
@@ -720,7 +913,7 @@ class Renderer:
         self._draw_health(window, player)
         self._draw_coin_hud(window, player)
         self._draw_boss_bar(window, enemies)
-        self._draw_hotbar(window, player.inventory)
+        self._draw_hotbar(window, player)
         self._draw_combat_level_bar(window, player)
         self._draw_day_night_indicator(window, world_clock)
         if notifications is not None:
@@ -734,10 +927,23 @@ class Renderer:
                 chest_pos = _nearest_station_tile(world, player.center_x, player.center_y, CHEST_ID)
             if chest_pos is not None:
                 self._draw_chest_prompt(window, chest_pos, camera)
+        if nearby_npc is None and not crafting_open:
+            workbench_pos = _nearest_station_tile(world, player.center_x, player.center_y, tile_registry.WORKBENCH_ID)
+            if workbench_pos is not None:
+                self._draw_station_prompt(window, workbench_pos, camera, "Craft")
+        if nearby_npc is None and not furnace_open:
+            furnace_hint_pos = _nearest_station_tile(world, player.center_x, player.center_y, tile_registry.FURNACE_ID)
+            if furnace_hint_pos is not None:
+                self._draw_station_prompt(window, furnace_hint_pos, camera, "Furnace")
         if inventory_open:
             self._draw_inventory_screen(window, player)
         if crafting_open:
-            self._draw_crafting_screen(window, world, player, furnace_manager, crafting_scroll_y)
+            self._draw_crafting_screen(
+                window, world, player, furnace_manager, crafting_scroll_y,
+                crafting_filter_rarity, crafting_filter_craftable_only,
+            )
+        if furnace_open and furnace_pos is not None:
+            self._draw_furnace_screen(window, player, furnace_manager, furnace_pos)
         if skills_open:
             self._draw_skills_screen(window, player, selected_skill_id)
         if talking_to is not None:
@@ -747,7 +953,7 @@ class Renderer:
         if map_open:
             self._draw_map_screen(window, world, player)
         if paused:
-            self._draw_pause_overlay(window, camera, prefs, settings_open)
+            self._draw_pause_overlay(window, camera, prefs, settings_open, rebinding_action)
         if sleep_fade_ratio > 0.0:
             self._draw_sleep_fade(window, sleep_fade_ratio)
         self._anim_counter += 1
@@ -1138,12 +1344,31 @@ class Renderer:
         return (int(r + (255 - r) * blend), int(g * (1 - blend * 0.6)), int(b * (1 - blend * 0.6)))
 
     def _draw_entity_health_bar(self, window, entity, screen_x, screen_y, width) -> None:
-        if entity.health >= entity.enemy_def.max_health:
+        """Name + HP bar floating above an enemy, always shown (not just
+        while damaged -- user feedback: "coloque para mostrar a vida deles
+        e o nome em cima do sprite") so a player can size up an unfamiliar
+        mob, including its day-based-difficulty-scaled health (see
+        game/entities/difficulty.py), before engaging. Bosses skip this --
+        they already get a persistent top-center name+bar (_draw_boss_bar)
+        that would just be redundant floating over the sprite too."""
+        if entity.enemy_def.ai_type == AIType.BOSS:
             return
-        ratio = max(0.0, entity.health / entity.enemy_def.max_health)
+        bar_width = max(width, 30)
+        bar_height = 4
+        bar_x = screen_x + (width - bar_width) / 2
         bar_y = screen_y - 8
-        pygame.draw.rect(window, HEALTH_BG, (screen_x, bar_y, width, 4))
-        pygame.draw.rect(window, HEALTH_FG, (screen_x, bar_y, width * ratio, 4))
+
+        name_surface = self.font.render(entity.enemy_def.name, True, (235, 232, 240))
+        name_x = screen_x + width / 2 - name_surface.get_width() / 2
+        name_y = bar_y - name_surface.get_height() - 3
+        backing = pygame.Surface((name_surface.get_width() + 6, name_surface.get_height() + 2), pygame.SRCALPHA)
+        backing.fill((12, 12, 16, 150))
+        window.blit(backing, (name_x - 3, name_y - 1))
+        window.blit(name_surface, (name_x, name_y))
+
+        ratio = max(0.0, entity.health / entity.max_health)
+        pygame.draw.rect(window, HEALTH_BG, (bar_x, bar_y, bar_width, bar_height))
+        pygame.draw.rect(window, HEALTH_FG, (bar_x, bar_y, bar_width * ratio, bar_height))
 
     def _draw_summons(self, window, summons, camera, light_sources, ambient_light) -> None:
         """Twig Sprite still has no dedicated art -- a small glowing
@@ -1179,32 +1404,59 @@ class Renderer:
         center_x, center_y = camera.world_to_screen(summon.center_x, summon.center_y)
         window.blit(sprite, (center_x - sprite.get_width() / 2, center_y - sprite.get_height() / 2))
 
-    def _draw_npcs(self, window, world, npcs, camera, light_sources, ambient_light) -> None:
-        """NPCs have no dedicated sprites in the asset pack (same gap as
-        enemies), so they're a simple humanoid: body rect + head circle
-        in NpcDef.color, with a nameplate. A tiny idle bob so they don't
-        read as a placed tile."""
+    def _draw_npcs(self, window, world, npcs, camera, light_sources, ambient_light, player=None) -> None:
+        """NPCs reuse a playable-character idle (NpcDef.sprite_character_id)
+        already loaded on character_animations -- no dedicated NPC art in
+        the pack. A tiny idle bob so they don't read as a placed tile; the
+        nameplate stays. Falls back to the old flat humanoid if the id is
+        missing or unloaded."""
         bob = int(2 * math.sin(self._anim_counter / 12.0))
         for npc in npcs:
             screen_x, screen_y = camera.world_to_screen(npc.x, npc.y)
-            screen_y += bob
             w = npc.width * camera.zoom
             h = npc.height * camera.zoom
             surface_y = world.surface_height_at(int(npc.center_x // TILE_SIZE))
             local_ambient = lighting.ambient_light_for_depth(npc.center_y / TILE_SIZE - surface_y, ambient_light)
             light = lighting.light_level_at(npc.center_x / TILE_SIZE, npc.center_y / TILE_SIZE, light_sources, local_ambient)
-            body = self._dim_color(npc.npc_def.color, light)
-            head = self._dim_color(tuple(min(255, c + 40) for c in npc.npc_def.color), light)
-            body_rect = pygame.Rect(screen_x + w * 0.18, screen_y + h * 0.38, w * 0.64, h * 0.58)
-            head_r = max(3, int(w * 0.28))
-            head_center = (int(screen_x + w / 2), int(screen_y + h * 0.28))
-            self._draw_shadow_at(window, camera, screen_x + w / 2, screen_y + h - bob, w)
-            pygame.draw.rect(window, body, body_rect)
-            pygame.draw.circle(window, head, head_center, head_r)
-            pygame.draw.circle(window, (20, 20, 20), head_center, head_r, 1)
+
+            char_id = npc.npc_def.sprite_character_id
+            anims = self.character_animations.get(char_id) if char_id else None
+            if anims:
+                if player is not None:
+                    facing_right = npc.center_x <= player.center_x
+                else:
+                    facing_right = True
+                direction = "right" if facing_right else "left"
+                frames = anims[("idle", direction)]
+                sprite = frames[(self._anim_counter // PLAYER_ANIMATION_FRAME_DELAY) % len(frames)]
+                if camera.zoom != 1.0:
+                    size = (max(1, int(sprite.get_width() * camera.zoom)), max(1, int(sprite.get_height() * camera.zoom)))
+                    sprite = pygame.transform.scale(sprite, size)
+                sprite = self._darken_sprite(sprite, light)
+                feet_x, feet_y = camera.world_to_screen(npc.center_x, npc.y + npc.height)
+                self._draw_shadow_at(window, camera, feet_x, feet_y, sprite.get_width())
+                draw_x = feet_x - sprite.get_width() / 2
+                draw_y = feet_y - sprite.get_height() + bob
+                window.blit(sprite, (draw_x, draw_y))
+                name_x_center = feet_x
+                name_top = draw_y
+            else:
+                draw_y = screen_y + bob
+                body = self._dim_color(npc.npc_def.color, light)
+                head = self._dim_color(tuple(min(255, c + 40) for c in npc.npc_def.color), light)
+                body_rect = pygame.Rect(screen_x + w * 0.18, draw_y + h * 0.38, w * 0.64, h * 0.58)
+                head_r = max(3, int(w * 0.28))
+                head_center = (int(screen_x + w / 2), int(draw_y + h * 0.28))
+                self._draw_shadow_at(window, camera, screen_x + w / 2, screen_y + h, w)
+                pygame.draw.rect(window, body, body_rect)
+                pygame.draw.circle(window, head, head_center, head_r)
+                pygame.draw.circle(window, (20, 20, 20), head_center, head_r, 1)
+                name_x_center = screen_x + w / 2
+                name_top = draw_y
+
             name = self.font.render(npc.npc_def.name, True, (255, 255, 255))
-            name_x = screen_x + w / 2 - name.get_width() / 2
-            name_y = screen_y - name.get_height() - 2
+            name_x = name_x_center - name.get_width() / 2
+            name_y = name_top - name.get_height() - 2
             pygame.draw.rect(window, HUD_BG, (name_x - 3, name_y - 1, name.get_width() + 6, name.get_height() + 2))
             window.blit(name, (name_x, name_y))
 
@@ -1221,6 +1473,20 @@ class Renderer:
         tile_x, tile_y = chest_pos
         screen_x, screen_y = camera.world_to_screen(tile_x * TILE_SIZE + TILE_SIZE / 2, tile_y * TILE_SIZE)
         prompt = self.font.render("T  Open", True, (255, 230, 140))
+        x = screen_x - prompt.get_width() / 2
+        y = screen_y - 28
+        pygame.draw.rect(window, HUD_BG, (x - 6, y - 3, prompt.get_width() + 12, prompt.get_height() + 6), border_radius=4)
+        pygame.draw.rect(window, ACCENT_GOLD, (x - 6, y - 3, prompt.get_width() + 12, prompt.get_height() + 6), 1, border_radius=4)
+        window.blit(prompt, (x, y))
+
+    def _draw_station_prompt(self, window, tile_pos, camera, label: str) -> None:
+        """Same floating hint style as _draw_chest_prompt, for the
+        Workbench/Furnace tiles -- both now open their own screen on a
+        left-click instead of sharing the C-key Crafting screen (see
+        InputHandler._try_open_station_screen)."""
+        tile_x, tile_y = tile_pos
+        screen_x, screen_y = camera.world_to_screen(tile_x * TILE_SIZE + TILE_SIZE / 2, tile_y * TILE_SIZE)
+        prompt = self.font.render(f"Click: {label}", True, (255, 230, 140))
         x = screen_x - prompt.get_width() / 2
         y = screen_y - 28
         pygame.draw.rect(window, HUD_BG, (x - 6, y - 3, prompt.get_width() + 12, prompt.get_height() + 6), border_radius=4)
@@ -1371,13 +1637,16 @@ class Renderer:
         name_text = self.font.render(f"{boss.enemy_def.name}  (Phase {phase_index + 1})", True, (255, 255, 255))
         window.blit(name_text, (x + bar_width // 2 - name_text.get_width() // 2, y - name_text.get_height() - 2))
 
-    def _draw_hotbar(self, window, inventory) -> None:
+    def _draw_hotbar(self, window, player) -> None:
+        inventory = player.inventory
         slot_size = 48
         gap = 6
         total_width = HOTBAR_SLOTS * slot_size + (HOTBAR_SLOTS - 1) * gap
         start_x = (WINDOW_WIDTH - total_width) // 2
         y = WINDOW_HEIGHT - slot_size - 12
 
+        mouse_pos = pygame.mouse.get_pos()
+        hovered_item_id, hovered_qty = None, None
         for i in range(HOTBAR_SLOTS):
             slot = inventory.slots[i]
             x = start_x + i * (slot_size + gap)
@@ -1391,6 +1660,15 @@ class Renderer:
                 self._draw_item_icon(window, slot.item_id, x + 6, y + 6, slot_size - 12)
                 qty_text = self.font.render(str(slot.quantity), True, (255, 255, 255))
                 window.blit(qty_text, (x + slot_size - 18, y + slot_size - 18))
+                if rect.collidepoint(mouse_pos):
+                    hovered_item_id, hovered_qty = slot.item_id, slot.quantity
+
+        # The hotbar is always on screen during normal play (no menu needed
+        # to see it), so this is most players' primary way of checking an
+        # item's stats -- same tooltip the Inventory/Chest/Furnace screens
+        # already use (see _draw_item_tooltip), just triggered from here too.
+        if hovered_item_id is not None:
+            self._draw_item_tooltip(window, hovered_item_id, hovered_qty, mouse_pos, player)
 
     def _draw_nine_slice(self, window, texture: pygame.Surface, rect: pygame.Rect, border: int = 4, zoom: int = 4) -> None:
         """Blits a small bordered frame sprite (assets/validar/UI) stretched
@@ -1504,10 +1782,38 @@ class Renderer:
             lines.append(current)
         return lines
 
-    def _item_tooltip_stat_lines(self, item_def) -> list:
+    def _summon_rod_stat_lines(self, item_def, player) -> list:
+        """Stat lines for a Summoner rod (weapon_class="summon") -- unlike
+        an ordinary weapon, a rod's own ItemDef carries no real damage/
+        range/speed of its own (those all default to 0/"Melee", which used
+        to render as a meaningless "Damage: 0" / "Melee" pair). The actual
+        numbers live on the SummonDef it casts (summon_registry.py), and
+        the damage a summon actually lands is boosted live by the Magic
+        skill (see combat_system.resolve_summon_attacks) -- so this shows
+        both the summon's base damage and the player's current *effective*
+        damage with today's Magic level, not just one flat stat."""
+        lines = []
+        summon_def = summon_registry.get(item_def.summons_id)
+        lines.append((f"Summons: {summon_def.name}", (200, 180, 255)))
+        lines.append((f"Summon Damage: {summon_def.damage:.0f}", (255, 200, 200)))
+        if player is not None:
+            multiplier = player.skills.magic_damage_multiplier()
+            effective = summon_def.damage * multiplier
+            lines.append((f"Effective Damage: {effective:.0f} (Magic x{multiplier:.2f})", (255, 220, 180)))
+        if item_def.crit_chance > 0:
+            lines.append((f"Crit Chance: {item_def.crit_chance:.0%}", (255, 220, 140)))
+        lines.append((f"Attack Speed: every {summon_def.attack_interval_s:.1f}s", (200, 190, 190)))
+        lines.append((f"Attack Range: {summon_def.attack_range_tiles:.1f} tiles", (200, 190, 190)))
+        lines.append((f"Summon Move Speed: {summon_def.move_speed:.1f}", (200, 190, 190)))
+        return lines
+
+    def _item_tooltip_stat_lines(self, item_def, player=None) -> list:
         """(text, color) lines for an item tooltip's stat block -- varies
         by category, since e.g. mining_power only means anything for a
-        tool and defense only for armor."""
+        tool and defense only for armor. `player` is optional (only needed
+        for a summon rod's Magic-boosted effective damage -- see
+        _summon_rod_stat_lines) so call sites without one handy still get
+        every other stat."""
         lines = []
         if item_def.is_tool:
             lines.append((f"Mining Power: {item_def.mining_power:.0f}", (200, 220, 255)))
@@ -1516,17 +1822,24 @@ class Renderer:
             if item_def.fortune_chance > 0:
                 lines.append((f"Fortune: {item_def.fortune_chance:.0%} extra drop", (200, 255, 210)))
         if item_def.is_weapon:
-            lines.append((f"Damage: {item_def.damage:.0f}", (255, 200, 200)))
-            if item_def.uses_magic:
-                lines.append(("Magic bolt (no ammo)", (200, 180, 255)))
+            if item_def.weapon_class == SUMMON_WEAPON_CLASS:
+                lines.extend(self._summon_rod_stat_lines(item_def, player))
             else:
-                lines.append(("Ranged" if item_def.is_ranged else "Melee", (200, 190, 190)))
+                lines.append((f"Damage: {item_def.damage:.0f}", (255, 200, 200)))
+                if item_def.crit_chance > 0:
+                    lines.append((f"Crit Chance: {item_def.crit_chance:.0%}", (255, 220, 140)))
+                if item_def.uses_magic:
+                    lines.append(("Magic bolt (no ammo)", (200, 180, 255)))
+                else:
+                    lines.append(("Ranged" if item_def.is_ranged else "Melee", (200, 190, 190)))
         if item_def.equip_slot is not None:
             if item_def.defense > 0:
                 lines.append((f"Defense: {item_def.defense:.0f}", (200, 255, 210)))
             lines.append((f"Slot: {item_def.equip_slot.capitalize()}", (170, 165, 185)))
             if item_def.light_emit > 0:
                 lines.append(("Emits light", (255, 230, 140)))
+            if item_def.move_speed_bonus > 0:
+                lines.append((f"Move Speed: +{item_def.move_speed_bonus:.1f}", (180, 255, 200)))
             if item_def.accessory_kind is not None:
                 lines.append(("Press E to use", (200, 220, 255)))
         if item_def.heal_amount > 0:
@@ -1537,15 +1850,17 @@ class Renderer:
             lines.append((f"Value: {item_def.value}", (230, 200, 120)))
         return lines
 
-    def _draw_item_tooltip(self, window, item_id: str, quantity, mouse_pos) -> None:
+    def _draw_item_tooltip(self, window, item_id: str, quantity, mouse_pos, player=None) -> None:
         """A floating tooltip near the cursor for whichever bag/equipment
         slot is currently hovered: name, category/rarity, description, and
-        a category-specific stat block (see _item_tooltip_stat_lines)."""
+        a category-specific stat block (see _item_tooltip_stat_lines).
+        `player` is optional -- only a Summoner rod's effective damage
+        (Magic-boosted) needs it, everything else works without."""
         item_def = item_registry.get(item_id)
         rarity_color = _RARITY_BORDER_COLOR.get(item_def.rarity, HUD_BORDER)
 
         desc_lines = self._wrap_text(item_def.description, ITEM_TOOLTIP_WIDTH - 24)
-        stat_lines = self._item_tooltip_stat_lines(item_def)
+        stat_lines = self._item_tooltip_stat_lines(item_def, player)
 
         name_surface = self.font.render(item_def.name, True, rarity_color)
         category_surface = self.font.render(
@@ -1615,7 +1930,7 @@ class Renderer:
 
         hovered_item_id, hovered_quantity = self._hovered_inventory_item(player, mouse_pos)
         if hovered_item_id is not None:
-            self._draw_item_tooltip(window, hovered_item_id, hovered_quantity, mouse_pos)
+            self._draw_item_tooltip(window, hovered_item_id, hovered_quantity, mouse_pos, player)
 
     def _hovered_inventory_item(self, player, mouse_pos):
         """(item_id, quantity) for whatever bag or equipment slot the
@@ -1693,24 +2008,25 @@ class Renderer:
             surf = self.font.render(text, True, (200, 200, 205))
             window.blit(surf, (INVENTORY_PANEL_X + 16 + col * col_width, y + 22 + row * 18))
 
-    def _draw_crafting_screen(self, window, world, player, furnace_manager, scroll_y: int) -> None:
+    def _draw_crafting_screen(self, window, world, player, furnace_manager, scroll_y: int, rarity_filter=None, craftable_only: bool = False) -> None:
         discovered = player.discovered_item_ids
-        panel_height = crafting_panel_height(discovered)
+        panel_height = crafting_panel_height(discovered, rarity_filter, craftable_only, player, world)
         panel_rect = pygame.Rect(CRAFTING_PANEL_X, CRAFTING_PANEL_Y, CRAFTING_PANEL_WIDTH, panel_height)
-        self._draw_panel_chrome(window, panel_rect, "Crafting (C to close)", CRAFTING_TITLE_HEIGHT)
+        self._draw_panel_chrome(window, panel_rect, "Crafting (C or click the Workbench to close)", CRAFTING_TITLE_HEIGHT)
+        self._draw_crafting_filter_bar(window, rarity_filter, craftable_only)
 
         grid_rect = pygame.Rect(
-            CRAFTING_PANEL_X, CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT,
-            CRAFTING_PANEL_PADDING + CRAFTING_GRID_WIDTH, panel_height - CRAFTING_TITLE_HEIGHT,
+            CRAFTING_PANEL_X, CRAFTING_PANEL_Y + CRAFTING_TITLE_HEIGHT + CRAFTING_FILTER_BAR_HEIGHT,
+            CRAFTING_PANEL_PADDING + CRAFTING_GRID_WIDTH, panel_height - CRAFTING_TITLE_HEIGHT - CRAFTING_FILTER_BAR_HEIGHT,
         )
         previous_clip = window.get_clip()
         window.set_clip(grid_rect)
 
         mouse_pos = pygame.mouse.get_pos()
-        layout = list(_crafting_layout(scroll_y, discovered))
+        layout = list(_crafting_layout(scroll_y, discovered, rarity_filter, craftable_only, player, world))
         hovered_recipe = None
         cell_index = 0
-        for title, recipes in _recipe_sections(discovered):
+        for title, recipes in _recipe_sections(discovered, rarity_filter, craftable_only, player, world):
             if not recipes:
                 continue
             _, first_cell_rect = layout[cell_index]
@@ -1730,8 +2046,13 @@ class Renderer:
                 self._draw_recipe_cell(window, world, player, furnace_manager, recipe, cell_rect, is_hovered)
                 cell_index += 1
 
+        if not layout:
+            empty_text = "No recipes discovered yet" if not discovered else "No recipes match these filters"
+            empty_surface = self.font.render(empty_text, True, (150, 148, 160))
+            window.blit(empty_surface, (grid_rect.x + CRAFTING_PANEL_PADDING, grid_rect.y + 10))
+
         window.set_clip(previous_clip)
-        self._draw_scrollbar(window, grid_rect, panel_rect, scroll_y, crafting_max_scroll(discovered))
+        self._draw_scrollbar(window, grid_rect, panel_rect, scroll_y, crafting_max_scroll(discovered, rarity_filter, craftable_only, player, world))
 
         details_rect = pygame.Rect(
             grid_rect.right + CRAFTING_DIVIDER_GAP, grid_rect.y,
@@ -1743,6 +2064,33 @@ class Renderer:
             (grid_rect.right + CRAFTING_DIVIDER_GAP // 2, grid_rect.bottom - 10), 1,
         )
         self._draw_recipe_details(window, world, player, furnace_manager, hovered_recipe, details_rect)
+
+    def _draw_crafting_filter_bar(self, window, rarity_filter, craftable_only: bool) -> None:
+        """Rarity tabs on the left ("All" plus one per ItemRarity) and a
+        "Craftable now" toggle on the right -- user feedback: with every
+        discovered recipe dumped into one long scroll, it was hard to
+        find anything; these let the player narrow the grid down to a
+        rarity tier or to just what they can actually make right now."""
+        mouse_pos = pygame.mouse.get_pos()
+        for index, rarity in enumerate(CRAFTING_RARITY_TABS):
+            rect = _crafting_rarity_tab_rect(index)
+            active = rarity == rarity_filter
+            hovered = rect.collidepoint(mouse_pos)
+            bg = ACCENT_GOLD if active else ((70, 66, 82) if hovered else (38, 36, 46))
+            text_color = (25, 20, 14) if active else (215, 212, 222)
+            pygame.draw.rect(window, bg, rect, border_radius=5)
+            pygame.draw.rect(window, PANEL_BORDER, rect, width=1, border_radius=5)
+            label = self.font.render(_RARITY_TAB_LABELS[rarity], True, text_color)
+            window.blit(label, label.get_rect(center=rect.center))
+
+        toggle_rect = crafting_craftable_toggle_rect()
+        hovered = toggle_rect.collidepoint(mouse_pos)
+        bg = (110, 220, 110) if craftable_only else ((70, 66, 82) if hovered else (38, 36, 46))
+        text_color = (14, 30, 14) if craftable_only else (215, 212, 222)
+        pygame.draw.rect(window, bg, toggle_rect, border_radius=5)
+        pygame.draw.rect(window, PANEL_BORDER, toggle_rect, width=1, border_radius=5)
+        label = self.font.render("Craftable now", True, text_color)
+        window.blit(label, label.get_rect(center=toggle_rect.center))
 
     def _draw_scrollbar(self, window, viewport_rect, panel_rect, scroll_y: int, max_scroll: int) -> None:
         if max_scroll <= 0:
@@ -1845,6 +2193,21 @@ class Renderer:
         window.blit(station_text, (text_x, rect.y + 22))
 
         y = icon_rect.bottom + 14
+        # What you actually get -- damage/defense/crit/etc. for the crafted
+        # item itself, same stat block the inventory tooltip uses (see
+        # _item_tooltip_stat_lines), reused here since a recipe row
+        # previously only ever showed its *cost*, never its own payoff.
+        result_def = item_registry.get(recipe.result_item_id)
+        stat_lines = self._item_tooltip_stat_lines(result_def, player)
+        if stat_lines:
+            for text, color in stat_lines:
+                line_surface = self.font.render(text, True, color)
+                window.blit(line_surface, (rect.x, y))
+                y += 16
+            y += 8
+            pygame.draw.line(window, PANEL_BORDER, (rect.x, y), (rect.right, y), 1)
+            y += 10
+
         ingredients_title = self.font.render("Ingredients", True, (170, 165, 185))
         window.blit(ingredients_title, (rect.x, y))
         y += 20
@@ -2195,7 +2558,75 @@ class Renderer:
             if rect.collidepoint(mouse_pos) and not slot.is_empty:
                 hovered_item_id, hovered_qty = slot.item_id, slot.quantity
         if hovered_item_id is not None:
-            self._draw_item_tooltip(window, hovered_item_id, hovered_qty, mouse_pos)
+            self._draw_item_tooltip(window, hovered_item_id, hovered_qty, mouse_pos, player)
+
+    def _draw_furnace_screen(self, window, player, furnace_manager, furnace_pos) -> None:
+        panel = pygame.Rect(FURNACE_PANEL_X, FURNACE_PANEL_Y, FURNACE_PANEL_WIDTH, FURNACE_PANEL_HEIGHT)
+        self._draw_panel_chrome(window, panel, "Furnace (Esc or click it again to close)", FURNACE_TITLE_HEIGHT)
+
+        storage = furnace_manager.input_at(furnace_pos)
+        fuel_slot = storage.slots[FURNACE_FUEL_SLOT]
+        ore_slot = storage.slots[FURNACE_ORE_SLOT]
+        active_job = furnace_manager.job_at(furnace_pos)
+
+        mouse_pos = pygame.mouse.get_pos()
+        fuel_rect = furnace_fuel_slot_rect()
+        ore_rect = furnace_ore_slot_rect()
+        self._draw_item_slot(window, fuel_rect, slot=fuel_slot, empty_label="Fuel", highlight=fuel_rect.collidepoint(mouse_pos))
+        self._draw_item_slot(window, ore_rect, slot=ore_slot, empty_label="Ore", highlight=ore_rect.collidepoint(mouse_pos))
+        window.blit(self.font.render("Fuel", True, (170, 165, 185)), (fuel_rect.x, fuel_rect.y - 18))
+        window.blit(self.font.render("Ore", True, (170, 165, 185)), (ore_rect.x, ore_rect.y - 18))
+
+        result_rect = furnace_result_icon_rect()
+        window.blit(pygame.transform.scale(self.ui_theme["cell"], result_rect.size), result_rect.topleft)
+        pygame.draw.rect(window, ACCENT_GOLD if active_job is not None else PANEL_BORDER, result_rect, width=2, border_radius=6)
+
+        status_x = result_rect.right + 16
+        if active_job is not None:
+            icon_pad = 8
+            self._draw_item_icon(window, active_job.bar_item_id, result_rect.x + icon_pad, result_rect.y + icon_pad, result_rect.width - icon_pad * 2)
+            progress = 1.0 - max(0.0, min(1.0, active_job.remaining_s / active_job.total_s))
+            bar_rect = pygame.Rect(result_rect.x, result_rect.bottom + 6, result_rect.width, 6)
+            pygame.draw.rect(window, (30, 24, 20), bar_rect, border_radius=3)
+            fill_rect = pygame.Rect(bar_rect.x, bar_rect.y, int(bar_rect.width * progress), bar_rect.height)
+            if fill_rect.width > 0:
+                pygame.draw.rect(window, (235, 150, 60), fill_rect, border_radius=3)
+            bar_name = item_registry.get(active_job.bar_item_id).name
+            window.blit(self.font.render(f"Smelting {bar_name}", True, (230, 200, 160)), (status_x, result_rect.centery - 18))
+            window.blit(self.font.render(f"{max(0.0, active_job.remaining_s):.1f}s left", True, (195, 190, 175)), (status_x, result_rect.centery))
+        elif not fuel_slot.is_empty and not ore_slot.is_empty:
+            # Ore/fuel are both loaded but don't match a recipe together
+            # (e.g. coal alongside an ore that needs a different fuel) --
+            # tell the player why nothing's happening instead of just
+            # sitting idle with no explanation.
+            window.blit(self.font.render("Fuel and ore don't match", True, (235, 150, 150)), (status_x, result_rect.centery - 8))
+        else:
+            recipe_hint = smelt_registry.recipe_for_ore(ore_slot.item_id) if not ore_slot.is_empty else None
+            if recipe_hint is not None:
+                window.blit(self.font.render(f"Will smelt: {recipe_hint.name}", True, (200, 200, 210)), (status_x, result_rect.centery - 18))
+                window.blit(self.font.render("Needs fuel", True, (200, 150, 100)), (status_x, result_rect.centery))
+            else:
+                window.blit(self.font.render("Idle", True, (150, 148, 160)), (status_x, result_rect.centery - 8))
+                window.blit(self.font.render("Insert ore + fuel below", True, (150, 148, 160)), (status_x, result_rect.centery + 10))
+
+        bag_first_rect = furnace_bag_slot_rect(0)
+        divider_y = bag_first_rect.y - 22
+        pygame.draw.line(window, PANEL_BORDER, (FURNACE_PANEL_X + 14, divider_y), (FURNACE_PANEL_X + FURNACE_PANEL_WIDTH - 14, divider_y), 1)
+        window.blit(self.font.render("Bag -- click coal/ore to load the furnace", True, (170, 165, 185)), (FURNACE_PANEL_X + 20, divider_y - 18))
+
+        hovered_item_id, hovered_qty = None, None
+        if fuel_rect.collidepoint(mouse_pos) and not fuel_slot.is_empty:
+            hovered_item_id, hovered_qty = fuel_slot.item_id, fuel_slot.quantity
+        if ore_rect.collidepoint(mouse_pos) and not ore_slot.is_empty:
+            hovered_item_id, hovered_qty = ore_slot.item_id, ore_slot.quantity
+        for index, slot in enumerate(player.inventory.slots):
+            rect = furnace_bag_slot_rect(index)
+            self._draw_item_slot(window, rect, slot=slot, highlight=rect.collidepoint(mouse_pos))
+            if rect.collidepoint(mouse_pos) and not slot.is_empty:
+                hovered_item_id, hovered_qty = slot.item_id, slot.quantity
+
+        if hovered_item_id is not None:
+            self._draw_item_tooltip(window, hovered_item_id, hovered_qty, mouse_pos, player)
 
     def _draw_map_screen(self, window, world, player) -> None:
         """Scales World.explored_cells (see game/world/exploration.py) --
@@ -2350,17 +2781,17 @@ class Renderer:
 
         if hovered_item_id is not None:
             slot_qty = player.inventory.count_item(hovered_item_id)
-            self._draw_item_tooltip(window, hovered_item_id, slot_qty, mouse_pos)
+            self._draw_item_tooltip(window, hovered_item_id, slot_qty, mouse_pos, player)
 
     # --- Pause menu ---
 
-    def _draw_pause_overlay(self, window, camera, prefs, settings_open: bool = False) -> None:
+    def _draw_pause_overlay(self, window, camera, prefs, settings_open: bool = False, rebinding_action=None) -> None:
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 140))
         window.blit(overlay, (0, 0))
 
         if settings_open:
-            self._draw_settings_panel(window, camera, prefs)
+            self._draw_settings_panel(window, camera, prefs, rebinding_action)
             return
 
         text = self.big_font.render("PAUSED", True, (255, 255, 255))
@@ -2380,14 +2811,15 @@ class Renderer:
                 label_text = self.font.render(label, True, (235, 230, 210))
                 window.blit(label_text, label_text.get_rect(center=rect.center))
 
-    def _draw_settings_panel(self, window, camera, prefs) -> None:
+    def _draw_settings_panel(self, window, camera, prefs, rebinding_action=None) -> None:
         """A real panel (unlike the old 3 bare buttons on the dark
         overlay) with a -/+ stepper row per adjustable value -- Zoom
-        (already existed), Music Volume and SFX Volume (new: see
-        game/core/music.py's/sfx.py's set_volume and GameApp.
-        adjust_music_volume/adjust_sfx_volume). `prefs` is duck-typed
-        (only .music_volume/.sfx_volume read) so a caller that hasn't
-        wired real preferences yet still gets sane values, not a crash."""
+        (already existed), Music Volume and SFX Volume -- plus a
+        click-to-rebind Controls grid (see game/input/bindings.py).
+        `prefs` is duck-typed so a caller that hasn't wired real
+        preferences yet still gets sane values, not a crash."""
+        from game.input.bindings import BINDABLE_ACTIONS, bound_key, key_display_name
+
         music_volume = getattr(prefs, "music_volume", 0.4)
         sfx_volume = getattr(prefs, "sfx_volume", 0.7)
 
@@ -2413,6 +2845,31 @@ class Renderer:
             value_surface = self.font.render(value_fmt(camera, music_volume, sfx_volume), True, (215, 212, 222))
             value_center_x = (down_rect.right + up_rect.left) // 2
             window.blit(value_surface, value_surface.get_rect(center=(value_center_x, row.centery)))
+
+        controls_y = _settings_bindings_origin_y() - 22
+        controls_label = self.font.render("Controls  (click a key to rebind)", True, ACCENT_GOLD)
+        window.blit(controls_label, (panel.x + 20, controls_y))
+
+        for index, (action_id, label) in enumerate(BINDABLE_ACTIONS):
+            label_rect = settings_binding_label_rect(index)
+            button_rect = settings_binding_button_rect(index)
+            name_surface = self.font.render(label, True, (230, 228, 235))
+            window.blit(name_surface, name_surface.get_rect(midleft=(label_rect.x, label_rect.centery)))
+
+            listening = rebinding_action == action_id
+            hovered = button_rect.collidepoint(mouse_pos) or listening
+            texture = self.ui_theme["cell_chosen"] if hovered else self.ui_theme["cell"]
+            window.blit(pygame.transform.scale(texture, button_rect.size), button_rect.topleft)
+            pygame.draw.rect(window, ACCENT_GOLD if hovered else HUD_BORDER, button_rect, width=1, border_radius=4)
+            key_text = "..." if listening else key_display_name(bound_key(prefs, action_id))
+            key_surface = self.font.render(key_text, True, (235, 230, 210))
+            window.blit(key_surface, key_surface.get_rect(center=button_rect.center))
+
+        reset_rect = settings_reset_bindings_rect()
+        hovered = reset_rect.collidepoint(mouse_pos)
+        self._draw_ui_button(window, reset_rect, "blank", hovered=hovered)
+        reset_text = self.font.render("Reset Keys", True, (235, 230, 210))
+        window.blit(reset_text, reset_text.get_rect(center=reset_rect.center))
 
         back_rect = step_rects["back"]
         hovered = back_rect.collidepoint(mouse_pos)

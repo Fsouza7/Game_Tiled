@@ -97,9 +97,9 @@ click/arrow-keys/Enter controls, text cards instead of portraits) -- see
 Continue loads the save and skips both. Everything below applies once
 you're in the world.
 
-| Action | Key |
+| Action | Default key |
 |---|---|
-| Move left/right | A/D or Arrow keys |
+| Move left/right | A/D (arrow keys still work if they aren't rebound to something else) |
 | Jump (press again mid-air for a double jump) | Space |
 | Mine / break block | Left mouse (hold) |
 | Place block | Right mouse |
@@ -118,9 +118,11 @@ you're in the world.
 | Open/close Skills (levels + skill-point tree) | K |
 | Talk to a nearby NPC, open a Chest, toggle a Door, or sleep in a Bed | T |
 | Use equipped accessory (Grapple Hook) | E |
+| Open/close Map | M |
 | Select a skill / unlock an eligible tree node (while Skills is open) | Left-click it |
 | Attack (melee or ranged -- select a weapon in the hotbar first) | Left-click |
 | Pause (opens a real menu: Resume/Settings/Save/Load/Restart/Quit) | Esc |
+| Rebind a gameplay key | Esc -> Settings, click the key, press a new one |
 | Debug overlay (FPS, pos, chunk, seed, enemy count, day/time/ambient) | F3 |
 | Toggle debug mode (see "How the debug tools work") | F4 |
 | Debug: unlock all recipes / reveal map / full heal + coins / spawn all bosses / spawn all enemies / teleport to cursor / teleport to spawn (debug mode only) | F5 / F6 / F7 / F8 / F9 / F10 / F11 |
@@ -167,7 +169,7 @@ game/
     crafting_system.py   # ingredient/station checks, the craft transaction, and recipe-discovery logic (no UI code)
     smelt_recipe.py       # SmeltRecipeDef schema (ore+fuel -> bar, over time)
     smelt_registry.py      # every smelt recipe, one entry each (add ore->bar pairs here)
-    furnace_system.py       # FurnaceManager: start/track/complete timed smelt jobs, keyed by furnace tile
+    furnace_system.py       # FurnaceManager: per-furnace input hopper (fuel+ore) + timed smelt jobs that auto-restart into a queue
   entities/
     entity.py           # position/size/velocity base class
     tile_collision.py    # shared AABB-vs-tile-grid movement, used by Player and Enemy alike
@@ -194,7 +196,8 @@ game/
     notifications.py      # small FIFO toast queue (recipe unlocks, blocked-mining messages)
     game_app.py          # the game loop; wires world/player/camera/input/renderer together
   input/
-    input_handler.py    # keyboard/mouse -> game actions (the only file that knows key bindings)
+    bindings.py          # rebindable gameplay keys + defaults/reserved list
+    input_handler.py    # keyboard/mouse -> game actions (reads GameApp.prefs.bindings)
   rendering/
     renderer.py          # draws world/player/HUD/inventory+equipment panel/crafting panel; no gameplay logic
     assets.py            # loads/slices real art and builds procedural textures+icons
@@ -439,6 +442,50 @@ to the surface. The enemy *roster* itself is unchanged -- the same
 biome-weighted picks as the surface (Scorpion still desert-only) show up
 underground too, just more often and at any hour.
 
+## How day-based enemy difficulty scaling works
+
+The world gets more dangerous the longer a playthrough runs (user
+request: "cada dia que passa os mobs ficam mais fortes"). `game/entities/
+difficulty.py`'s `health_multiplier(day_count)`/`damage_multiplier
+(day_count)` are pure functions of `WorldClock.day_count` -- day 1 is
+always the unscaled 1.0x baseline; each day after that adds
+`ENEMY_HEALTH_PCT_PER_DAY` (8%) / `ENEMY_DAMAGE_PCT_PER_DAY` (5%), capped
+at `ENEMY_DIFFICULTY_MAX_DAY` (30) so a very long playthrough doesn't
+scale into absurd numbers (by day 30: +232% health, +145% damage, then
+flat).
+
+The multiplier is baked into an `Enemy`/`Boss` instance **at spawn time
+only** (`health_multiplier`/`damage_multiplier` params on
+`Enemy.__init__`, both defaulting to 1.0 so every pre-existing call site
+is unaffected) -- it's never retroactive, so a Slime that's been alive
+since day 1 doesn't suddenly get tougher when day 10 arrives; only mobs
+spawned *after* that point do. This is also why `Enemy` now keeps its
+own `max_health`/`contact_damage`, separate from the shared, frozen
+`EnemyDef` it points to -- two Slimes spawned on different days can
+genuinely differ in toughness without the definition itself ever being
+mutated. `EnemySpawner._try_spawn` (called every regular spawn),
+`GameApp.try_summon_boss`, and the F8/F9 debug spawn tools all read
+`self.world_clock.day_count` and pass the resulting multipliers through.
+The Slime King's enrage-minions inherit the boss's own already-scaled
+stats (`boss.max_health / boss.enemy_def.max_health`) rather than
+needing `day_count` threaded down into `boss_ai.py` separately.
+
+## How the always-on enemy name + HP bar works
+
+Every alive non-boss enemy now shows its name and a small HP bar
+floating just above it, all the time -- not just once damaged (user
+request: "coloque para mostrar a vida deles e o nome em cima do
+sprite"). `Renderer._draw_entity_health_bar` is called for every enemy
+regardless of whether it renders as a real sprite (`enemy_animations`)
+or a flat vector shape (Slime's ellipse, Duskwing's diamond, ...) --
+previously this only fired for sprited enemies, and only while
+`health < max_health`, so a flat-shape mob (or any full-health one) had
+no name or bar at all. Bosses are explicitly skipped here (an
+`ai_type == AIType.BOSS` early-return) since they already get a
+persistent top-center name+phase+bar (`_draw_boss_bar`, drawn once per
+frame regardless of hover/proximity) -- a second one floating over the
+sprite would just be redundant.
+
 ## How the Building system works (Doors, Beds & Sleeping)
 
 Houses need no new tile type for their walls -- the existing placeable
@@ -574,7 +621,7 @@ unpauses, **Restart** rebuilds the whole run from the same seed
 (`GameApp.restart` -> `_new_run`, keeping the chosen character skin),
 **Quit** exits, and **Settings** opens a real panel
 (`GameApp.settings_open`, see "How the Settings screen works") with Zoom,
-Music Volume and SFX Volume steppers plus Back.
+Music Volume and SFX Volume steppers, a click-to-rebind Controls grid, plus Back.
 
 ## How the Settings screen works
 
@@ -583,7 +630,18 @@ A proper panel (`Renderer._draw_settings_panel`, reusing the UI reskin's
 the pause overlay: one row per adjustable value --
 **Zoom** (the pre-existing camera control), **Music Volume**, **SFX
 Volume** -- each a `-`/`+` stepper (`VOLUME_STEP` per click) around a
-live percentage, plus **Back**.
+live percentage, then a two-column **Controls** grid of every rebindable
+gameplay key (`game/input/bindings.py`), plus **Reset Keys** and **Back**.
+
+Click a key chip to listen; the next keypress assigns it (swapping with
+whoever already owned that key, so two actions never share one). Esc
+cancels a listen without closing Settings. Esc, Enter, 1-9 and F1-F12
+are reserved -- binding them would brick pause, the hotbar, or debug --
+and mouse / zoom +/- stay hardcoded. Arrow keys still move left/right
+unless that arrow is already somebody's binding. Bindings live on
+`GameApp.prefs.bindings` and persist to `saves/settings.json` next to
+volume, so Restart/Load never reset them. An old settings file with no
+`bindings` field just gets the defaults.
 
 Music/SFX volume are held on `GameApp.prefs`
 (`game/core/settings_store.py`'s `Settings`), loaded once in
@@ -606,7 +664,8 @@ Known gaps: no master mute-all toggle (Music and SFX are independent
 sliders only), and no volume control on the title screen itself (the
 pause menu's Settings only exists once a run is in progress -- background
 music already plays there, just isn't adjustable until you start/continue
-a game).
+a game). Mouse buttons, hotbar 1-9, Esc and the F-keys are not rebindable
+(see reserved-key note above).
 
 ## How Checkpoints work
 
@@ -854,37 +913,69 @@ exist in `item_registry.py`), `result_item_id`, `result_quantity`, and
 `station_tile_id` (`None` for craftable-anywhere-by-hand, or a tile id like
 `tile_registry.WORKBENCH_ID` to require the player stand within
 `STATION_SEARCH_RADIUS_TILES` of that tile). No other file needs to change
--- the crafting screen (`C`) lists every registered recipe automatically,
-grouped by the result item's category (see "How the crafting screen is
-laid out" below), and scrolls (mouse wheel) once the list outgrows
-`CRAFTING_VIEWPORT_HEIGHT` so the panel never grows into the HUD no matter
-how many recipes get added later. It won't be craftable (or even show its
-name) until the player has discovered every one of its ingredients -- see
-"How recipe discovery works".
+-- the crafting screen (`C`, or click a placed Workbench -- see below)
+lists every registered recipe automatically, grouped by the result item's
+category (see "How the crafting screen is laid out" below), and scrolls
+(mouse wheel) once the list outgrows `CRAFTING_VIEWPORT_HEIGHT` so the
+panel never grows into the HUD no matter how many recipes get added
+later. It won't be craftable (or even show its name) until the player has
+discovered every one of its ingredients -- see "How recipe discovery
+works".
+
+Crafting and smelting are two separate screens now (user feedback:
+clicking a Workbench or a Furnace should open *that station's* screen,
+not one combined menu). `InputHandler._try_open_station_screen` fires on
+a left-click: if the clicked, in-range tile is `WORKBENCH_ID` it opens
+Crafting (`game_app.crafting_open`); if it's `FURNACE_ID` it opens the
+Furnace screen (`game_app.furnace_open` -- see "How the furnace works")
+instead. It's skipped while the selected hotbar item is a tool
+(`ItemDef.is_tool`), so holding a pickaxe out and clicking a placed
+station still mines/relocates it rather than always opening its screen.
+`C` still toggles Crafting from anywhere as a shortcut (handy for the
+station-less recipes); there's no keyboard shortcut for the Furnace
+screen, only the click, since every furnace recipe needs one nearby
+anyway. Both screens close on `Esc`, and a small "Click: Craft" /
+"Click: Furnace" floating hint (`Renderer._draw_station_prompt`) appears
+over a nearby station's tile whenever its screen isn't already open.
 
 ## How the crafting screen is laid out
 
 A grid of icon cells on the left (several recipes side by side, not one
-tall row each) plus a fixed details panel on the right for whichever cell
-the mouse is currently over (`Renderer._draw_recipe_details`: name,
-station badge, full ingredient list with live counts, and a status line --
-"Click to craft", "Missing ingredients", "Needs Workbench nearby", or the
-smelting-specific states below). The grid itself only needs to carry an
-icon, a quantity badge and a thin colored border for status (green=ready,
-grey=missing ingredients, amber=needs its station), since the actual
-breakdown lives in the details panel -- hovering is what reveals it,
-clicking is still what crafts it.
+tall row each -- 7 columns, sized generously after user feedback that the
+original 5-column layout felt cramped) plus a fixed details panel on the
+right for whichever cell the mouse is currently over
+(`Renderer._draw_recipe_details`: name, station badge, full ingredient
+list with live counts, and a status line -- "Click to craft", "Missing
+ingredients", "Needs Workbench nearby"). The grid itself only needs to
+carry an icon, a quantity badge and a thin colored border for status
+(green=ready, grey=missing ingredients, amber=needs its station), since
+the actual breakdown lives in the details panel -- hovering is what
+reveals it, clicking is still what crafts it. Smelting recipes never
+appear here at all anymore -- they're the Furnace screen's own queue (see
+"How the furnace works").
 
 Cells are grouped by what the result item's `ItemCategory` *is*
 (`_CATEGORY_SECTION_ORDER` in `renderer.py`: Building, Structures &
 Utility, Tools, Weapons, Armor, Ammo, Materials) rather than by where
 they're crafted -- a layout a player recognizes at a glance ("I want a
 weapon" beats "I wonder which station this needs"); each cell's own
-station requirement (`_station_label`: "Anywhere", "Workbench",
-"Furnace", ...) shows up in the details panel instead. Smelt recipes (see
-"How the furnace works") get their own trailing "Smelting" section, since
-starting one is a different interaction (a timed job, not an instant
-craft) even though the grid/details code is shared.
+station requirement (`_station_label`: "Anywhere", "Workbench", ...) shows
+up in the details panel instead.
+
+A filter bar (`Renderer._draw_crafting_filter_bar`) sits between the title
+and the grid: five rarity tabs (All/Common/Uncommon/Rare/Epic --
+`CRAFTING_RARITY_TABS`, filtering on the *result item's* `ItemRarity`) on
+the left, and a "Craftable now" toggle on the right that hides every
+recipe that isn't currently `has_ingredients` + `is_near_station` (i.e.
+what the player could click right now with what's in their bag) -- direct
+answers to "show recipes by rarity" and "filters for what I can make with
+what I have" user feedback. Both live as session-only state on `GameApp`
+(`crafting_filter_rarity`, `crafting_filter_craftable_only`, not
+persisted across save/load) and are threaded through every crafting-grid
+helper (`_recipe_sections`, `_crafting_layout`, `crafting_max_scroll`,
+`recipe_at_screen_pos`, ...) as optional trailing params, so every old
+call site that only cares about discovery (tests included) still works
+unfiltered by just not passing them.
 
 ## How recipe discovery works
 
@@ -935,27 +1026,48 @@ message every single frame.
 ## How the furnace works
 
 A craftable station (`tile_registry.FURNACE_ID`, `game/crafting/
-furnace_system.py`) for turning ore into bars -- unlike everything else in
-the crafting screen, smelting is a *started-then-collected* transaction,
-not an instant one, because burning takes real time. Clicking a smelt
-recipe (`SmeltRecipeDef`, `game/crafting/smelt_registry.py`) while
-ingredients and a nearby furnace are available immediately consumes the
-ore and fuel (Coal, for every current recipe) and starts a `FurnaceJob`
-keyed by *that specific furnace tile's position* -- so multiple placed
-furnaces can smelt in parallel, but each one only runs one job at a time
-(a second click while busy just fails, shown in the UI as a dimmed
-"Furnace busy with another bar" row for every *other* smelt recipe, and a
-live progress bar for the one actually in progress). `GameApp` polls
-`FurnaceManager.update(dt)` every frame; when a job's `smelt_time_s`
-elapses it returns the finished `(item_id, quantity)` for `GameApp` to
-grant via `collect_and_discover` (so a first Iron Bar can itself unlock
-the Iron Pickaxe recipe) and announce with a "ready!" toast. Four ores
-that were catalog-only in earlier phases now have a real obtain-then-use
-path this way: Iron Ore, Topaz, Sapphire and Emerald each smelt into their
-own Bar. Iron Bar crafts Iron tools/armor and can be re-smelted (2 Iron
-Bars + 2 Coal) into a Steel Bar for the next mining/armor tier. Topaz,
-Sapphire and Emerald Bars combine at a Workbench into an **Arcane Bar**,
-the magic-tier material (see "How magic-tier gear works").
+furnace_system.py`) for turning ore into bars, with its own screen
+(opened by clicking a placed Furnace -- see above) separate from
+Crafting. Unlike a crafted item, smelting is a *started-then-collected*
+transaction, not an instant one, because burning takes real time -- and
+unlike a single craft, it's a **queue**: the player deposits a whole
+stack of ore and fuel, and the furnace keeps converting one recipe's
+worth at a time on its own until it runs out, instead of needing a click
+per batch (user feedback: "quero funace queue, aonde eu insiro o carvao
+e os minerios e ele vai fabricando").
+
+Each furnace tile gets its own 2-slot input hopper
+(`FurnaceManager.input_at`, keyed by that tile's position so multiple
+placed furnaces run independently) -- slot 0 is fuel, slot 1 is ore
+(`FURNACE_FUEL_SLOT`/`FURNACE_ORE_SLOT`). The Furnace screen's bag grid
+routes a clicked inventory item into whichever slot accepts it
+automatically (`smelt_registry.all_fuel_item_ids()`/`all_ore_item_ids()`
+decide "fuel" vs. "ore" vs. "furnace can't use that"; a slot already
+holding a different item rejects the deposit rather than mixing).
+Clicking the fuel or ore slot itself withdraws it back to the bag.
+
+`FurnaceManager.update(dt)` (polled every frame by `GameApp`) advances
+whichever job is active per furnace, same `FurnaceJob`/`smelt_time_s`
+timing as before; the moment one finishes, it's granted straight to the
+player's inventory via `collect_and_discover` (so a first Iron Bar can
+itself unlock the Iron Pickaxe recipe) and announced with a "ready!"
+toast -- there's no separate output slot to collect from. Right after
+clearing a finished job, `update()` also tries `_try_autostart` on every
+furnace with an input hopper: if its fuel/ore slots still hold enough for
+`smelt_registry.recipe_for_ore(ore_slot.item_id)`, it consumes another
+batch and starts the next `FurnaceJob` immediately, no player action
+needed -- this loop is the whole queue. `FurnaceManager.start_smelt` (the
+original one-shot, instant-consume-from-inventory path) still exists
+untouched for anything that wants a single smelt with no setup, but the
+Furnace screen itself only ever uses the deposit+auto-restart path above.
+
+Four ores that were catalog-only in earlier phases have a real
+obtain-then-use path this way: Iron Ore, Topaz, Sapphire and Emerald each
+smelt into their own Bar. Iron Bar crafts Iron tools/armor and can be
+re-smelted (2 Iron Bars + 2 Coal) into a Steel Bar for the next
+mining/armor tier. Topaz, Sapphire and Emerald Bars combine at a
+Workbench into an **Arcane Bar**, the magic-tier material (see "How
+magic-tier gear works").
 
 ## How magic-tier gear works
 
@@ -973,6 +1085,57 @@ mechanic rather than only a bigger number:
   (`weapon_class` stays `"normal"`).
 - **Arcane Helm** -- defense above a Steel Helmet, plus `light_emit` so
   wearing it lights nearby tiles like a moving torch.
+
+A later itemization pass completed the rest of the tier from the same
+Arcane Bar: **Arcane Body/Greaves/Boots** (filling out the armor set
+alongside the Helm), an **Arcane Sword** (melee, with a chance to crit)
+and an **Arcane Rod** (casts an Arcane Familiar, the Summoner's version
+of this tier) -- see "How item stats work (crit, move speed)" below.
+
+## How item stats work (crit, move speed) and the full gear ladder
+
+A big itemization pass (user-requested: "melhore todo o sistema de
+itemização, builds por classe, status de cada item, crie novos itens
+late games, novas armas etc", run as 3 parallel agents in isolated git
+worktrees) filled out weapon/armor progression end to end and added two
+new stats. Full blow-by-blow (every new item id, exact stats, and the
+known gaps) lives in TODO.md under "Itemization overhaul" -- this is the
+shape of it:
+
+- **`ItemDef` gained `crit_chance`, `crit_damage_mult` and
+  `move_speed_bonus`** (`game/items/item.py`). Crit is rolled in
+  `combat_system.py` for melee, ranged, *and* summon attacks (reading
+  the currently-equipped rod's own `crit_chance` for the summon case) --
+  every class benefits from the same system, not just whoever swings a
+  sword. `move_speed_bonus` sums across every equipped slot
+  (`Equipment.total_move_speed_bonus()`, same pattern as
+  `total_defense`) and adds straight onto `PLAYER_MOVE_SPEED` in
+  `Player.move_left`/`move_right`. Both show up on the item tooltip
+  (`Renderer._item_tooltip_stat_lines`) when non-zero.
+- **A real weapon ladder now exists at every material tier**, not just
+  for pickaxes/armor: Wood -> Iron -> Steel -> Arcane -> Voidsteel for
+  swords (8 -> 14 -> 20 -> 28 -> 38 damage) and a parallel Wood -> Iron
+  -> Steel bow line, plus a summon rod at every one of those tiers
+  (Twig Sprite 7 -> Iron Guardian 14 -> Steel Colossus 21 -> Arcane
+  Familiar 27 -> Void Wraith 34 damage) so the Summoner class always has
+  an equivalent option to whatever the Warrior just unlocked.
+- **A new post-Arcane endgame tier: Voidsteel.** A universal (every
+  biome, not gem-locked like Topaz/Sapphire/Emerald), very rare, very
+  deep-only ore (`VOID_ORE_ID`, `game/world/tile_registry.py` +
+  `world_generator.py`) smelts into a **Voidsteel Bar** (the slowest
+  smelt in the game) that crafts a full weapon/armor/accessory/summon
+  set above everything that existed before this pass -- see TODO.md for
+  every stat. The final boss's loot line also grew: 2 new recipes
+  (**Slime King's Fang**/**Bulwark**) consume the existing
+  `slime_king_core` drop alongside the pre-existing Crown, so farming
+  the Slime King repeatedly is a real, farmable side-grade path to the
+  same power level.
+- **Accessories went from 1 (Grapple Hook) to 7**, most of them purely
+  passive stat items requiring zero new code -- `Equipment.total_defense`/
+  `total_light_emit`/`total_move_speed_bonus` already sum every equipped
+  slot including accessory, so an accessory with `defense`/`light_emit`/
+  `move_speed_bonus` set and `accessory_kind=None` (i.e. not an *active*
+  E-triggered behavior like Grapple Hook) just works.
 
 ## How the Personal Chest works
 
@@ -1045,7 +1208,9 @@ which is how "different enemies at night" is satisfied), `biome_id` (`None`
 for any biome, or a `biome_registry` id like `DESERT_ID` to restrict it to
 that biome -- Scorpion is desert-only, spawned by checking
 `world_generator.biome_at` at the candidate spawn column), and optionally
-`drop_item_id`/`drop_chance`/`drop_min`/`drop_max`. To add a genuinely new
+`drop_item_id`/`drop_chance`/`drop_min`/`drop_max`. Frost Hopper (Snow) and
+Swamp Mosquito (Jungle) are the other two exclusive enemies, same `biome_id`
+gating as Scorpion. To add a genuinely new
 *behavior* (not just new stats on an existing one), add a 4th `AIType` and
 a matching `_update_*` function in `enemy_ai.py`.
 
@@ -1057,8 +1222,9 @@ until the player walks into chase range. **Slime** and **Slime King**
 reuse `Mini_Slime_Idle/Walk/Hurt.png` (32px strips; the king is just
 scaled up), feet-anchored so hops sit on the ground. **Scorpion** uses
 `Scorpian/Idel.png`, `Walk.png` and `Attack.png` (3-frame 32px strips).
-Crawler has no matching sprite (`mosquito.png` / `Eyeball.png` are unused
-flying sheets; `assets/20 Enemies.png` is a watermarked promo) so it stays
+**Frost Hopper** reuses those Mini_Slime sheets with an icy `_tinted` wash;
+**Swamp Mosquito** uses `mosquito.png` (48px cells, wing flap on row 0).
+Crawler has no matching sprite (`assets/20 Enemies.png` is a watermarked promo) so it stays
 a flat colored rectangle in `_draw_enemies`. To give a new enemy a sprite,
 add it to `assets.load_enemy_animations` keyed by `EnemyDef.id`.
 
@@ -1153,7 +1319,9 @@ one thing that stay identical everywhere: the same noise field decides
 "air pocket or not" regardless of which biome's stone it would otherwise
 carve out of. Vegetation is biome-aware too: Desert suppresses the normal
 tree roll and grows cacti (1-2 tiles tall, single column) instead; Forest,
-Snow and Jungle all currently share the same tree system unchanged. "Cave"
+Snow and Jungle all currently share the same tree system unchanged. Snow and
+Jungle each have a biome-exclusive enemy (Frost Hopper / Swamp Mosquito),
+matching Desert's Scorpion. "Cave"
 is a fifth biome only in the sense that it was already built in Phase 1
 (universal underground cave generation, independent of the surface biome
 above it) -- it never needed its own zoning since it isn't a horizontal
@@ -1304,8 +1472,10 @@ structure's loot would be unreachable without one.
 What's persisted: the world seed, `world.elapsed_s` (so the moving
 hazards' oscillation stays continuous), the world clock (time of day, day
 count), full player state (position, spawn point, character skin,
-health, inventory, equipment, `discovered_item_ids`), and any in-progress
-Furnace jobs. **Only modified chunks are saved, and only their changed
+health, inventory, equipment, `discovered_item_ids`), any in-progress
+Furnace jobs, and every furnace's queued input hopper (deposited
+fuel/ore, `FurnaceManager.inputs` -- so saving mid-queue doesn't discard
+whatever stack was still smelting). **Only modified chunks are saved, and only their changed
 tiles** -- `Chunk.dirty` already existed for exactly this (set the moment
 any tile is mutated); at save time each dirty chunk's live tiles are
 diffed column-by-column against a freshly recomputed procedural baseline
@@ -1450,16 +1620,20 @@ unused after this pass and was deleted rather than left as dead code.
   Iron and Steel fill all four armor slots; magic-tier is the Arcane Helm
   (light) plus pickaxe/staff, not a full fourth armor set. Accessory is
   still the Grapple Hook.
-- A furnace smelts one job at a time with no queue (placing more furnaces
-  is the way to parallelize); Coal is the only fuel, one fixed quantity
-  per recipe, no fuel-efficiency mechanic.
+- A furnace still only runs one `FurnaceJob` at a time (placing more
+  furnaces is the way to parallelize), but it now auto-restarts from its
+  own input hopper as long as enough deposited ore/fuel remains -- see
+  "How the furnace works". Coal is the only fuel, one fixed quantity per
+  recipe, no fuel-efficiency mechanic, and the input hopper is only 2
+  slots (one ore type + one fuel type queued at a time, no mixed batches).
 - Only one tile can grant a random drop (Berry Bush, via `TileDef.drop_pool`)
   -- every other tile still has exactly one fixed `drop_item_id`.
 - Inventory/crafting UIs are click-driven panels (equip, unequip, craft,
   scroll), not full drag-and-drop or animated interfaces.
-- The pause menu's Settings has Zoom, Music Volume and SFX Volume (see
-  "How the Settings screen works") but no master mute-all toggle, no
-  volume control on the title screen itself, and no world-select screen.
+- The pause menu's Settings has Zoom, Music Volume, SFX Volume, and
+  rebindable gameplay keys (see "How the Settings screen works") but no
+  master mute-all toggle, no volume control on the title screen itself, and
+  no world-select screen.
 - Saw/Rock Head/Spike Head swing on a fixed rhythm (a sine oscillation of
   elapsed time) rather than charging when the player gets close -- see
   "How moving hazards work" for why.

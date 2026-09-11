@@ -2,6 +2,7 @@
 knockback. Kept separate from Player/Enemy so those stay physics/AI-only."""
 import logging
 import math
+import random
 from typing import List, Optional, Tuple, Union
 
 from game.combat.projectile import Projectile
@@ -124,6 +125,8 @@ def _try_melee_attack(player, item_def, enemies: List[Enemy], aim_dx: float, aim
     player.melee_swing_aim = (aim_dx, aim_dy)
     sfx.play("melee_swing")
     effective_damage = item_def.damage * player.skills.attack_damage_multiplier()
+    if random.random() < item_def.crit_chance:
+        effective_damage *= item_def.crit_damage_mult
 
     reach_px = MELEE_REACH_TILES * TILE_SIZE + player.width / 2
     half_arc_cos = math.cos(math.radians(MELEE_ARC_DEGREES / 2))
@@ -161,6 +164,8 @@ def _try_ranged_attack(player, item_def, aim_dx: float, aim_dy: float) -> Option
         effective_damage = item_def.damage * player.skills.magic_damage_multiplier()
     else:
         effective_damage = item_def.damage * player.skills.attack_damage_multiplier()
+    if random.random() < item_def.crit_chance:
+        effective_damage *= item_def.crit_damage_mult
 
     sfx.play("ranged_shoot")
     return Projectile(
@@ -217,6 +222,11 @@ def resolve_summon_attacks(player, summons: List[Summon], enemies: List[Enemy]) 
     targeting itself lives in summon_ai.py -- this only resolves the
     damage tick, same split already used for enemies (AI moves,
     combat_system damages)."""
+    selected = player.inventory.get_selected_item()
+    rod_def = item_registry.get(selected.item_id) if selected is not None else None
+    if rod_def is not None and rod_def.weapon_class != SUMMON_WEAPON_CLASS:
+        rod_def = None  # only crit off the rod if it's still the selected weapon
+
     for summon in summons:
         if not summon.alive or summon.attack_cooldown_remaining > 0.0:
             continue
@@ -225,6 +235,8 @@ def resolve_summon_attacks(player, summons: List[Summon], enemies: List[Enemy]) 
         if target is None:
             continue
         effective_damage = summon.damage * player.skills.magic_damage_multiplier()
+        if rod_def is not None and random.random() < rod_def.crit_chance:
+            effective_damage *= rod_def.crit_damage_mult
         if target.take_damage(effective_damage):
             _grant_combat_xp(player, "magic", effective_damage * MAGIC_XP_PER_DAMAGE)
             if target.defeated:
@@ -292,7 +304,7 @@ def resolve_contact_damage(player, enemies: List[Enemy]) -> None:
         return
     for enemy in enemies:
         if enemy.alive and player.rect.colliderect(enemy.rect):
-            raw_damage = enemy.enemy_def.contact_damage
+            raw_damage = enemy.contact_damage
             damage = max(MIN_DAMAGE_AFTER_DEFENSE, raw_damage - player_total_defense(player))
             player.take_damage(damage)
             player.invulnerability_remaining = PLAYER_HIT_INVULNERABILITY_S

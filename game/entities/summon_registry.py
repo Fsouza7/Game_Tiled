@@ -29,6 +29,30 @@ _register(SummonDef(
     attack_range_tiles=1.6, seek_radius_tiles=12.0, follow_distance_tiles=6.0,
 ))
 
+_register(SummonDef(
+    id="steel_colossus", name="Steel Colossus",
+    damage=21.0, attack_interval_s=0.6, move_speed=5.8,
+    width_tiles=0.9, height_tiles=0.9, color=(140, 150, 175),
+    attack_range_tiles=1.7, seek_radius_tiles=13.0, follow_distance_tiles=6.0,
+))
+
+_register(SummonDef(
+    id="arcane_familiar", name="Arcane Familiar",
+    damage=27.0, attack_interval_s=0.65, move_speed=6.5,
+    width_tiles=0.7, height_tiles=0.7, color=(160, 120, 230),
+    attack_range_tiles=1.8, seek_radius_tiles=14.0, follow_distance_tiles=6.0,
+))
+
+# --- Post-Arcane tier: Voidsteel Rod's summon (see item_registry.py's
+# summon_rod_voidsteel) -- the strongest minion in the game. ---
+
+_register(SummonDef(
+    id="void_wraith", name="Void Wraith",
+    damage=34.0, attack_interval_s=0.65, move_speed=6.0,
+    width_tiles=0.9, height_tiles=0.9, color=(90, 30, 140),
+    attack_range_tiles=1.8, seek_radius_tiles=13.0, follow_distance_tiles=6.5,
+))
+
 
 def get(summon_id: str) -> SummonDef:
     return _SUMMONS[summon_id]

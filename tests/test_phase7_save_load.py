@@ -67,6 +67,34 @@ def test_round_trip_preserves_furnace_jobs():
     assert job.total_s == 4.0
 
 
+def test_round_trip_preserves_furnace_input_hoppers():
+    """The furnace queue's deposited ore/fuel (FurnaceManager.inputs) must
+    survive a save/load same as an in-progress job -- otherwise saving
+    mid-queue would silently discard whatever stack the player left
+    smelting."""
+    from game.crafting.furnace_system import FURNACE_FUEL_SLOT, FURNACE_ORE_SLOT
+
+    world, player, x, surface_y = _make_world_and_player()
+    world_clock = WorldClock()
+    furnace_manager = FurnaceManager()
+    pos = (x, surface_y)
+    furnace_manager.input_at(pos)  # create the hopper
+    storage = furnace_manager.inputs[pos]
+    storage.slots[FURNACE_FUEL_SLOT].item_id = "coal"
+    storage.slots[FURNACE_FUEL_SLOT].quantity = 6
+    storage.slots[FURNACE_ORE_SLOT].item_id = "iron_ore"
+    storage.slots[FURNACE_ORE_SLOT].quantity = 9
+
+    data = save_system.serialize(world, player, world_clock, furnace_manager)
+    _, _, _, furnace_manager2 = save_system.deserialize(data)
+
+    storage2 = furnace_manager2.input_at(pos)
+    assert storage2.slots[FURNACE_FUEL_SLOT].item_id == "coal"
+    assert storage2.slots[FURNACE_FUEL_SLOT].quantity == 6
+    assert storage2.slots[FURNACE_ORE_SLOT].item_id == "iron_ore"
+    assert storage2.slots[FURNACE_ORE_SLOT].quantity == 9
+
+
 def test_round_trip_preserves_an_in_progress_craft_job():
     from game.crafting.crafting_system import CraftJob
 

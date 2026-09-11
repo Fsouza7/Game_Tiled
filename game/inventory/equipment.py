@@ -24,6 +24,15 @@ class Equipment:
                 defense += item_registry.get(item_id).defense
         return defense
 
+    def total_move_speed_bonus(self) -> float:
+        """Flat px/frame added to player move speed by every equipped
+        slot's item, same summed shape as total_defense."""
+        bonus = 0.0
+        for item_id in self.slots.values():
+            if item_id is not None:
+                bonus += item_registry.get(item_id).move_speed_bonus
+        return bonus
+
     def total_light_emit(self) -> int:
         """Brightest equipped item's light_emit (0-15). Worn light sources
         don't stack -- two glowing pieces still count as one lamp."""

@@ -53,7 +53,7 @@ from game.world.tile_registry import (
     JUNGLE_STONE_ID, TOPAZ_ORE_ID, SAPPHIRE_ORE_ID, EMERALD_ORE_ID,
     BUSH_ID, SPIKES_ID, TRAMPOLINE_ID, FAN_ID, TRAP_SAND_ID, TRAP_MUD_ID,
     TRAP_ICE_ID, CRUMBLE_PLATFORM_ID, CHECKPOINT_ID, FURNACE_ID, CHEST_ID,
-    PERSONAL_CHEST_ID,
+    PERSONAL_CHEST_ID, DOOR_CLOSED_ID, DOOR_OPEN_ID, BED_ID,
 )
 from game.entities import character_registry
 from game.world import hazard_feature
@@ -149,11 +149,18 @@ SCORPION_FRAME = 32
 DUSKWING_SPRITE_SIZE = 64  # 2x the 32px mini-bat cells, keeps the flap crisp
 SLIME_SPRITE_SIZE = 48
 SLIME_KING_SPRITE_SIZE = 96
+MOSQUITO_PATH = os.path.join(ENEMIES_DIR, "mosquito.png")
+MOSQUITO_CELL = 48  # 240x96 = 5 x 2 cells; row 0 flap (col 4 empty), row 1 splat
+SWAMP_MOSQUITO_SPRITE_SIZE = 64
+FROST_HOPPER_SPRITE_SIZE = SLIME_SPRITE_SIZE
 
 FLYING_HEAD_PATH = os.path.join("assets", "flying-head.png")
 FLYING_HEAD_CELL = 64  # 768x320 sheet = 12 x 5 cells
 IRON_GUARDIAN_SPRITE_SIZE = 64
 SCORPION_SPRITE_SIZE = 48
+EYEBALL_PATH = os.path.join(ENEMIES_DIR, "Eyeball.png")
+EYEBALL_CELL = 48  # 288x96 sheet = 6 x 2 cells; row 0 idle, row 1 chase (cols 4-5 splat)
+CRAWLER_SPRITE_SIZE = 48
 
 # --- UI reskin (user-supplied pack in assets/validar/UI, a top-down
 # survival asset pack). The character/enemy/nature art in that pack is
@@ -209,6 +216,12 @@ _SHEET_ICON_CELLS = {
     "slime_king_core": (17, 4),   # a rare-looking gem, distinct from the ore gems above
     # Already the right natural color as-is (a plain wood-brown rod).
     "summon_rod_wood": (6, 7),
+    # Row 9 is the sheet's unused potion/flask row; (9, 0) is the classic
+    # red round flask (don't reuse slime_core_idol's green orb at 18,2).
+    "healing_potion": (9, 0),
+    # Same feather cell as the duskwing drop it crafts from -- a charm
+    # made of feathers should look like feathers, not another tinted ring.
+    "feather_charm": (17, 10),
 }
 
 # Same real shape, recolored -- these don't fit _TIER_COLORS's wood/iron/
@@ -227,9 +240,22 @@ _TIER_COLORS = {
     "iron": (170, 170, 178),
     "steel": (120, 130, 145),
     "arcane": (150, 100, 210),
+    # The itemization pass's post-Arcane endgame tier -- a deeper, more
+    # saturated violet-black than arcane so the two read as clearly
+    # different tiers side by side, not just a lighter/darker copy.
+    "voidsteel": (75, 35, 115),
 }
 _PICKAXE_BASE_CELL = (10, 2)
 _PICKAXE_TIERS = ("wood", "stone", "iron", "steel", "arcane")  # -> "<tier>_pickaxe"
+
+# Same real sword/bow shapes as wood_sword/wood_bow's own (natural-color,
+# see _SHEET_ICON_CELLS) cells, recolored per tier -- the itemization pass
+# filled in Iron/Steel/Arcane/Voidsteel swords and Iron/Steel bows, which
+# had no icons of their own yet (see item_registry.py's icon_key on each).
+_SWORD_BASE_CELL = (5, 0)
+_SWORD_TIERS = ("iron", "steel", "arcane", "voidsteel")  # -> "<tier>_sword" (wood_sword has its own direct cell above)
+_BOW_BASE_CELL = (6, 3)
+_BOW_TIERS = ("iron", "steel")  # -> "<tier>_bow" (wood_bow has its own direct cell above)
 
 _INGOT_BASE_CELL = (17, 3)
 _BAR_COLORS = {
@@ -239,7 +265,12 @@ _BAR_COLORS = {
     "sapphire_bar": (60, 100, 200),
     "emerald_bar": (50, 160, 95),
     "arcane_bar": (140, 90, 210),
+    "voidsteel_bar": _TIER_COLORS["voidsteel"],
 }
+# A plain raw-stone-chunk shape (distinct from the ore-pile icons already
+# used for coal/iron_ore/the three gems -- Voidstone needed to read as its
+# own thing, not a recolor of coal's identical pile shape), recolored void.
+_VOID_ORE_CELL = (17, 1)
 
 # slot suffix -> base cell; combined with tier as f"{tier}_{slot}" (matches
 # item_registry.py's naming, e.g. "wood_helmet"/"iron_armor"). Arcane only
@@ -255,6 +286,13 @@ _ARMOR_TIERS = ("wood", "iron", "steel")  # arcane_helmet handled separately bel
 
 _CROWN_BASE_CELL = (7, 3)  # a paladin-style helm, recolored gold/red for royalty
 _CROWN_COLOR = (225, 180, 70)
+
+# Jewelry row (accessory slot items) -- a gold ring, a gemmed necklace and
+# a beaded bracelet, each recolored per item so multiple accessories can
+# share one shape family instead of needing a unique cell each.
+_ACCESSORY_RING_CELL = (8, 5)
+_ACCESSORY_AMULET_CELL = (8, 6)
+_ACCESSORY_BRACELET_CELL = (8, 7)
 
 
 def _load_sheet_item_icons() -> Dict[str, pygame.Surface]:
@@ -283,6 +321,69 @@ def _load_sheet_item_icons() -> Dict[str, pygame.Surface]:
     icons["slime_king_crown"] = _colorize(crop_cell(*_CROWN_BASE_CELL), _CROWN_COLOR)
     icons["summon_rod_iron"] = _colorize(crop_cell(*_SUMMON_ROD_IRON_CELL), _TIER_COLORS["iron"])
     icons["arcane_staff"] = _colorize(crop_cell(*_ARCANE_STAFF_CELL), _TIER_COLORS["arcane"])
+
+    # --- Itemization pass: sprites for every item that previously fell
+    # back to a flat category-color swatch (see item_registry.py's
+    # icon_key on each -- these dict keys match those exactly). Same
+    # "one real shape, recolored per tier" technique as everything above. ---
+
+    sword_base = crop_cell(*_SWORD_BASE_CELL)
+    for tier in _SWORD_TIERS:
+        icons[f"{tier}_sword"] = _colorize(sword_base, _TIER_COLORS[tier])
+
+    bow_base = crop_cell(*_BOW_BASE_CELL)
+    for tier in _BOW_TIERS:
+        icons[f"{tier}_bow"] = _colorize(bow_base, _TIER_COLORS[tier])
+
+    rod_base = crop_cell(*_SUMMON_ROD_IRON_CELL)  # same plain-rod shape as summon_rod_wood/iron above
+    for tier in ("steel", "arcane", "voidsteel"):
+        icons[f"summon_rod_{tier}"] = _colorize(rod_base, _TIER_COLORS[tier])
+
+    # Arcane armor completion (arcane_helmet already registered above) --
+    # note the body slot's item id is "arcane_body", not "arcane_armor"
+    # (unlike every other tier's f"{tier}_armor" naming), so this can't
+    # join the generic _ARMOR_TIERS loop.
+    icons["arcane_body"] = _colorize(crop_cell(*_ARMOR_BASE_CELLS["armor"]), _TIER_COLORS["arcane"])
+    icons["arcane_greaves"] = _colorize(crop_cell(*_ARMOR_BASE_CELLS["greaves"]), _TIER_COLORS["arcane"])
+    icons["arcane_boots"] = _colorize(crop_cell(*_ARMOR_BASE_CELLS["boots"]), _TIER_COLORS["arcane"])
+
+    # Voidsteel's full armor set -- slot names match _ARMOR_BASE_CELLS
+    # exactly (helmet/armor/greaves/boots), so this one's a clean loop.
+    for slot, base_cell in _ARMOR_BASE_CELLS.items():
+        icons[f"voidsteel_{slot}"] = _colorize(crop_cell(*base_cell), _TIER_COLORS["voidsteel"])
+
+    icons["voidstone"] = _colorize(crop_cell(*_VOID_ORE_CELL), _TIER_COLORS["voidsteel"])
+
+    # Slime King's farmable side-grade weapon/armor -- tinted the same
+    # royal gold/red as the existing Crown so the three read as one set.
+    icons["slime_king_fang"] = _colorize(sword_base, _CROWN_COLOR)
+    icons["slime_king_bulwark"] = _colorize(crop_cell(*_ARMOR_BASE_CELLS["armor"]), _CROWN_COLOR)
+
+    # Accessories: ring/amulet/bracelet shapes, recolored per item instead
+    # of each needing its own unique cell.
+    ring_base = crop_cell(*_ACCESSORY_RING_CELL)
+    amulet_base = crop_cell(*_ACCESSORY_AMULET_CELL)
+    bracelet_base = crop_cell(*_ACCESSORY_BRACELET_CELL)
+    icons["warriors_charm"] = _colorize(ring_base, _TIER_COLORS["steel"])
+    icons["summoners_trinket"] = _colorize(amulet_base, (120, 205, 135))  # slime-green, matches its "faintly glowing" description
+    icons["swift_anklet"] = _colorize(bracelet_base, (140, 220, 230))     # a light, breezy cyan for "swift"
+    icons["arcane_anklet"] = _colorize(bracelet_base, _TIER_COLORS["arcane"])
+    icons["voidstone_amulet"] = _colorize(amulet_base, _TIER_COLORS["voidsteel"])
+    # Gem-bar rings: one gold-ring shape, recolored per bar so Topaz /
+    # Sapphire / Emerald Bars have a use besides the Arcane Bar recipe.
+    icons["topaz_ring"] = _colorize(ring_base, _BAR_COLORS["topaz_bar"])
+    icons["sapphire_ring"] = _colorize(ring_base, _BAR_COLORS["sapphire_bar"])
+    icons["emerald_ring"] = _colorize(ring_base, _BAR_COLORS["emerald_bar"])
+    # Desert body armor sits between wood (brown) and iron; cactus-green
+    # on the same chestpiece silhouette as every other body slot.
+    icons["cactus_jerkin"] = _colorize(crop_cell(*_ARMOR_BASE_CELLS["armor"]), (80, 145, 60))
+
+    # Biome exclusive-mob drops -- reuse known sheet shapes (slime-gel blob,
+    # feather) recolored rather than guessing unused nearby cells. wing_charm
+    # is the mosquito_wing craft, same amulet silhouette as other accessories.
+    icons["frost_shard"] = _colorize(crop_cell(0, 1), (140, 210, 245))
+    icons["mosquito_wing"] = _colorize(crop_cell(17, 10), (90, 170, 80))
+    icons["wing_charm"] = _colorize(amulet_base, (110, 190, 70))
 
     return icons
 
@@ -560,6 +661,36 @@ def load_tile_textures() -> Dict[int, pygame.Surface]:
     furnace_base = _with_horizontal_lines(furnace_base, (40, 36, 40), [4], width=1)
     textures[FURNACE_ID] = pygame.transform.scale(furnace_base, (TILE_SIZE, TILE_SIZE))
 
+    # Wood door (closed): plank-tinted dirt + frame, two panels, a knob --
+    # no dedicated door art in the pack, same tint-plus-detail as Workbench.
+    door_closed = _tinted(dirt_raw, (120, 80, 45), 200)
+    pygame.draw.rect(door_closed, (70, 45, 25), pygame.Rect(2, 1, 28, 31), width=2)
+    pygame.draw.rect(door_closed, (155, 115, 70), pygame.Rect(6, 5, 20, 10))
+    pygame.draw.rect(door_closed, (155, 115, 70), pygame.Rect(6, 17, 20, 11))
+    pygame.draw.rect(door_closed, (90, 60, 35), pygame.Rect(6, 5, 20, 10), width=1)
+    pygame.draw.rect(door_closed, (90, 60, 35), pygame.Rect(6, 17, 20, 11), width=1)
+    pygame.draw.line(door_closed, (90, 60, 35), (6, 16), (25, 16), width=2)
+    pygame.draw.circle(door_closed, (200, 170, 80), (24, 18), 2)
+    textures[DOOR_CLOSED_ID] = pygame.transform.scale(door_closed, (TILE_SIZE, TILE_SIZE))
+
+    # Open door: the same frame with the panels punched out to a darker
+    # interior so the tile reads as a gap rather than a second wood block.
+    door_open = door_closed.copy()
+    pygame.draw.rect(door_open, (28, 20, 14), pygame.Rect(6, 4, 20, 25))
+    pygame.draw.rect(door_open, (70, 45, 25), pygame.Rect(2, 1, 6, 31))
+    textures[DOOR_OPEN_ID] = pygame.transform.scale(door_open, (TILE_SIZE, TILE_SIZE))
+
+    # Bed: plank-tinted base + a mattress and pillow (TileDef.color is the
+    # old flat maroon swatch -- the mattress reuses that hue so it still
+    # reads as "the bed tile" next to wood plank flooring).
+    bed_base = _tinted(dirt_raw, (140, 100, 60), 190)
+    pygame.draw.rect(bed_base, (70, 45, 25), pygame.Rect(1, 20, 30, 11))
+    pygame.draw.rect(bed_base, (180, 60, 70), pygame.Rect(2, 10, 28, 14))
+    pygame.draw.rect(bed_base, (210, 90, 95), pygame.Rect(2, 10, 28, 4))
+    pygame.draw.rect(bed_base, (230, 220, 210), pygame.Rect(3, 6, 10, 6))
+    bed_base = _with_horizontal_lines(bed_base, (90, 60, 35), [22], width=1)
+    textures[BED_ID] = pygame.transform.scale(bed_base, (TILE_SIZE, TILE_SIZE))
+
     return textures
 
 
@@ -788,13 +919,50 @@ def load_scorpion_animations(target_size: int) -> Dict[Tuple[str, str], List[pyg
     return _animation_table({"idle": idle, "chase": walk, "hit": hit}, target_size)
 
 
+def load_frost_hopper_animations(target_size: int) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    """Mini_Slime sheets recolored icy -- a Snow hopper, not a second slime
+    loader. Tinting after the crop keeps the hop cycle identical without
+    sharing load_slime_animations (other agents may also wrap those sheets)."""
+    ice = (130, 210, 255)
+    idle = [_tinted(frame, ice, 150) for frame in _horizontal_strip(SLIME_IDLE_PATH, SLIME_FRAME)]
+    walk = [_tinted(frame, ice, 150) for frame in _horizontal_strip(SLIME_WALK_PATH, SLIME_FRAME)]
+    hurt = _horizontal_strip(SLIME_HURT_PATH, SLIME_FRAME)
+    hit_src = hurt[1] if len(hurt) > 1 else hurt[0]
+    hit = [_tinted(hit_src, ice, 150)]
+    return _animation_table({"idle": idle, "chase": walk, "hit": hit}, target_size)
+
+
+def load_swamp_mosquito_animations(target_size: int) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    """mosquito.png: 48px cells, row 0 cols 0-3 is a wing flap (col 4 empty).
+    Row 1 is a death splat, not a chase cycle, so chase reuses the flap and
+    hit is a red-tinted idle frame -- same shape as duskwing."""
+    flap = _grid_row(MOSQUITO_PATH, MOSQUITO_CELL, 0, 4)
+    hover = flap[:3]
+    hit = [_tinted(hover[0], (255, 40, 40), 180)]
+    return _animation_table({"idle": hover, "chase": flap, "hit": hit}, target_size)
+
+
+def load_crawler_animations(target_size: int) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    """Eyeball.png: 288x96, 48px cells, 6 columns x 2 rows. Row 0 is a
+    look-around idle (all 6). Row 1 cols 0-3 is an angry chase; cols 4-5
+    are a death splat, skipped. Hit is a red-tinted idle frame -- same
+    shape as duskwing."""
+    idle = _grid_row(EYEBALL_PATH, EYEBALL_CELL, 0, 6)
+    chase = _grid_row(EYEBALL_PATH, EYEBALL_CELL, 1, 4)
+    hit = [_tinted(idle[0], (255, 40, 40), 180)]
+    return _animation_table({"idle": idle, "chase": chase, "hit": hit}, target_size)
+
+
 def load_enemy_animations() -> Dict[str, Dict[Tuple[str, str], List[pygame.Surface]]]:
-    """Per-enemy-id tables from assets/Enemies. Crawler still has no art."""
+    """Per-enemy-id tables from assets/Enemies."""
     return {
         "duskwing": load_duskwing_animations(DUSKWING_SPRITE_SIZE),
         "slime": load_slime_animations(SLIME_SPRITE_SIZE),
         "slime_king": load_slime_animations(SLIME_KING_SPRITE_SIZE),
         "scorpion": load_scorpion_animations(SCORPION_SPRITE_SIZE),
+        "frost_hopper": load_frost_hopper_animations(FROST_HOPPER_SPRITE_SIZE),
+        "swamp_mosquito": load_swamp_mosquito_animations(SWAMP_MOSQUITO_SPRITE_SIZE),
+        "crawler": load_crawler_animations(CRAWLER_SPRITE_SIZE),
     }
 
 
@@ -822,10 +990,25 @@ def load_iron_guardian_animations(target_size: int) -> Dict[Tuple[str, str], Lis
     return _animation_table({"idle": idle, "chase": chase}, target_size)
 
 
+def _recolor_animation_table(
+    table: Dict[Tuple[str, str], List[pygame.Surface]],
+    color: Tuple[int, int, int],
+) -> Dict[Tuple[str, str], List[pygame.Surface]]:
+    """One flying-head table, recolored per summon so Twig/Steel/Arcane/
+    Void aren't a second flat ellipse -- `_colorize` keeps the flap
+    shading the way item-tier icons already do."""
+    return {key: [_colorize(frame, color) for frame in frames] for key, frames in table.items()}
+
+
 def load_summon_animations() -> Dict[str, Dict[Tuple[str, str], List[pygame.Surface]]]:
-    """Per-summon-id tables, same shape as load_enemy_animations. Twig
-    Sprite still has no art (falls back to Renderer._draw_summons' flat
-    glowing shape)."""
+    """Per-summon-id tables, same shape as load_enemy_animations. Iron
+    Guardian keeps the natural flying-head colors; every other summon is
+    that same flap recolored to its own hue."""
+    iron = load_iron_guardian_animations(IRON_GUARDIAN_SPRITE_SIZE)
     return {
-        "iron_guardian": load_iron_guardian_animations(IRON_GUARDIAN_SPRITE_SIZE),
+        "iron_guardian": iron,
+        "twig_sprite": _recolor_animation_table(iron, (90, 180, 70)),       # twig green
+        "steel_colossus": _recolor_animation_table(iron, (110, 125, 150)),  # steel blue-gray
+        "arcane_familiar": _recolor_animation_table(iron, (150, 100, 210)), # arcane purple
+        "void_wraith": _recolor_animation_table(iron, (70, 25, 110)),       # void dark purple
     }

@@ -23,6 +23,8 @@ from game.settings import (
     CAVE_THRESHOLD,
     CAVE_MIN_DEPTH_BELOW_SURFACE,
     ORE_MIN_DEPTH_BELOW_SURFACE,
+    VOID_ORE_MIN_DEPTH_BELOW_SURFACE,
+    VOID_ORE_SPAWN_CHANCE,
     BIOME_ZONE_WIDTH_TILES,
     CACTUS_SPAWN_CHANCE,
     CACTUS_TALL_CHANCE,
@@ -37,7 +39,7 @@ from game.world.tile_registry import (
     AIR_ID, COAL_ORE_ID, IRON_ORE_ID, BEDROCK_ID,
     DECOR_CRATE_ID, TREE_ID, CACTUS_ID, BUSH_ID,
     SPIKES_ID, FIRE_ID, ARROW_TRAP_ID, CRUMBLE_PLATFORM_ID, FAN_ID,
-    TRAP_SAND_ID, TRAP_MUD_ID, TRAP_ICE_ID,
+    TRAP_SAND_ID, TRAP_MUD_ID, TRAP_ICE_ID, VOID_ORE_ID,
 )
 from game.world import biome_registry
 from game.world.biome_registry import DESERT_ID, SNOW_ID, JUNGLE_ID
@@ -160,6 +162,16 @@ def _ore_at(seed: int, x: int, y: int, biome) -> int:
     return biome.underground_tile_id
 
 
+def _void_ore_roll(seed: int, x: int, y: int) -> bool:
+    """Independent roll (its own RNG stream, separate from `_ore_at`'s
+    coal/iron/gem chances) for Voidstone: universal like coal/iron -- not
+    gated to a single biome the way the gems are -- but only ever considered
+    once a column is already past VOID_ORE_MIN_DEPTH_BELOW_SURFACE (see
+    `generate_column`), and far rarer than Iron even then."""
+    rng = random.Random((seed * 3266489917 + x * 2246822519 + y * 668265263) & 0xFFFFFFFF)
+    return rng.random() < VOID_ORE_SPAWN_CHANCE
+
+
 def generate_column(seed: int, x: int) -> list:
     """Generate the full vertical tile column for world x-coordinate x."""
     biome = biome_at(seed, x)
@@ -190,7 +202,18 @@ def generate_column(seed: int, x: int) -> list:
             ):
                 column[y] = AIR_ID
             elif depth_below_surface >= ORE_MIN_DEPTH_BELOW_SURFACE:
-                column[y] = _ore_at(seed, x, y, biome)
+                # Voidstone is checked as its own, separate branch (not a
+                # rewrite of `_ore_at`'s coal/iron/gem chances) -- it's
+                # universal like coal/iron, but only ever possible once deep
+                # enough (VOID_ORE_MIN_DEPTH_BELOW_SURFACE), and rolled with
+                # its own independent, much rarer chance.
+                if (
+                    depth_below_surface >= VOID_ORE_MIN_DEPTH_BELOW_SURFACE
+                    and _void_ore_roll(seed, x, y)
+                ):
+                    column[y] = VOID_ORE_ID
+                else:
+                    column[y] = _ore_at(seed, x, y, biome)
             else:
                 column[y] = biome.underground_tile_id
 

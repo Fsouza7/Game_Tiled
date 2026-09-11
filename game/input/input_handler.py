@@ -1,14 +1,14 @@
 """Translates raw pygame input into game actions.
 
-Kept separate from Player/World/Renderer so input remapping later (see
-README "Controles") only touches this file.
+Gameplay keys come from GameApp.prefs.bindings (see game/input/bindings.py)
+so remapping only changes that dict -- mouse, hotbar 1-9, Esc, and F3-F11
+stay hardcoded here on purpose.
 """
 import pygame
 
 from game.settings import TILE_SIZE, PLAYER_PLACE_COOLDOWN_S, VOLUME_STEP, SLEEP_FADE_DURATION_S
 from game.items import item_registry
-from game.crafting import crafting_system
-from game.crafting.smelt_recipe import SmeltRecipeDef
+from game.crafting import crafting_system, smelt_registry
 from game.combat import combat_system
 from game.combat.projectile import Projectile
 from game.entities import character_registry, class_registry
@@ -18,11 +18,13 @@ from game.skills.skill_tree_registry import nodes_for_skill
 from game.rendering.renderer import (
     recipe_at_screen_pos, equipment_slot_at_screen_pos, inventory_bag_index_at_screen_pos,
     crafting_max_scroll, CRAFTING_SCROLL_STEP,
+    crafting_rarity_tab_at_screen_pos, crafting_craftable_toggle_at_screen_pos, NO_TAB_HIT,
     character_index_at_screen_pos, class_index_at_screen_pos, pause_button_at_screen_pos,
     title_button_at_screen_pos,
     skill_index_at_screen_pos, skill_node_at_screen_pos,
     npc_button_at_screen_pos, npc_shop_offer_at_screen_pos, npc_shop_bag_index_at_screen_pos,
     chest_bag_index_at_screen_pos, chest_storage_index_at_screen_pos,
+    furnace_bag_index_at_screen_pos, furnace_fuel_slot_at_screen_pos, furnace_ore_slot_at_screen_pos,
 )
 from game.inventory.inventory import transfer_stack
 from game.crafting.furnace_system import nearest_station_tile
@@ -32,6 +34,7 @@ from game.npcs.npc_spawner import nearest_in_range
 from game.npcs import shop as npc_shop
 from game.core import save_system
 from game.core import sfx
+from game.input.bindings import bound_key, extra_arrow_held, is_reserved_key
 
 
 def _chest_storage_for(game_app):
@@ -68,7 +71,12 @@ class InputHandler:
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.paused:
                 self._handle_pause_click(event.pos, game_app)
             elif event.type == pygame.MOUSEWHEEL and game_app.crafting_open:
-                max_scroll = crafting_max_scroll(game_app.player.discovered_item_ids)
+                max_scroll = crafting_max_scroll(
+                    game_app.player.discovered_item_ids,
+                    getattr(game_app, "crafting_filter_rarity", None),
+                    getattr(game_app, "crafting_filter_craftable_only", False),
+                    game_app.player, game_app.world,
+                )
                 game_app.crafting_scroll_y = max(0, min(max_scroll, game_app.crafting_scroll_y - event.y * CRAFTING_SCROLL_STEP))
             elif event.type == pygame.MOUSEWHEEL:
                 if event.y > 0:
@@ -77,13 +85,20 @@ class InputHandler:
                     game_app.camera.zoom_out()
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.crafting_open:
                 self._handle_crafting_click(event.pos, game_app)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and getattr(game_app, "furnace_open", False):
+                self._handle_furnace_click(event.pos, game_app)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.inventory_open:
                 self._handle_inventory_click(event.pos, game_app)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3 and game_app.inventory_open:
                 self._handle_inventory_right_click(event.pos, game_app)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and game_app.skills_open:
                 self._handle_skills_click(event.pos, game_app)
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not game_app.crafting_open and not game_app.inventory_open and not game_app.skills_open and getattr(game_app, "talking_to", None) is None and not getattr(game_app, "chest_open", False):
+            elif (
+                event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                and not game_app.crafting_open and not game_app.inventory_open and not game_app.skills_open
+                and not getattr(game_app, "furnace_open", False)
+                and getattr(game_app, "talking_to", None) is None and not getattr(game_app, "chest_open", False)
+            ):
                 self._handle_attack_click(event.pos, game_app)
 
     def _handle_title_event(self, event, game_app) -> None:
@@ -160,6 +175,11 @@ class InputHandler:
                 game_app.adjust_sfx_volume(-VOLUME_STEP)
             elif action == "back":
                 game_app.settings_open = False
+                game_app.rebinding_action = None
+            elif action == "reset_bindings":
+                game_app.reset_bindings()
+            elif isinstance(action, str) and action.startswith("bind:"):
+                game_app.rebinding_action = action.split(":", 1)[1]
         else:
             if action == "play":
                 game_app.paused = False
@@ -175,14 +195,26 @@ class InputHandler:
                 game_app.running = False
 
     def _handle_crafting_click(self, pos, game_app) -> None:
-        player = game_app.player
-        recipe = recipe_at_screen_pos(pos, game_app.crafting_scroll_y, player.discovered_item_ids)
-        if recipe is None:
-            return  # undiscovered recipes never appear in the grid, so a hit here is always discovered
+        rarity_filter = getattr(game_app, "crafting_filter_rarity", None)
+        craftable_only = getattr(game_app, "crafting_filter_craftable_only", False)
 
-        if isinstance(recipe, SmeltRecipeDef):
-            game_app.furnace_manager.start_smelt(recipe, player.inventory, game_app.world, player.center_x, player.center_y)
+        tab_hit = crafting_rarity_tab_at_screen_pos(pos)
+        if tab_hit is not NO_TAB_HIT:
+            game_app.crafting_filter_rarity = tab_hit
+            game_app.crafting_scroll_y = 0
             return
+        if crafting_craftable_toggle_at_screen_pos(pos):
+            game_app.crafting_filter_craftable_only = not craftable_only
+            game_app.crafting_scroll_y = 0
+            return
+
+        player = game_app.player
+        recipe = recipe_at_screen_pos(
+            pos, game_app.crafting_scroll_y, player.discovered_item_ids,
+            rarity_filter, craftable_only, player, game_app.world,
+        )
+        if recipe is None:
+            return  # undiscovered/filtered-out recipes never appear in the grid, so a hit here is always a real, discovered one
 
         if player.craft_job is not None:
             if player.craft_job.recipe_id != recipe.id:
@@ -190,6 +222,44 @@ class InputHandler:
             return
 
         crafting_system.start_craft(recipe, player, game_app.world)
+
+    def _handle_furnace_click(self, pos, game_app) -> None:
+        """The Furnace screen's click path: click the fuel/ore slot to
+        withdraw it back to the bag, or click a bag item to load it into
+        the furnace's queue (coal-like items route to the fuel slot,
+        smeltable ores to the ore slot -- see FurnaceManager.deposit_fuel/
+        deposit_ore). No explicit "start smelting" click -- the queue
+        auto-starts on its own once both slots have enough (see
+        furnace_system.FurnaceManager.update)."""
+        player = game_app.player
+        furnace_pos = getattr(game_app, "furnace_pos", None)
+        if furnace_pos is None:
+            return
+        manager = game_app.furnace_manager
+
+        if furnace_fuel_slot_at_screen_pos(pos):
+            manager.withdraw_fuel(furnace_pos, player.inventory)
+            return
+        if furnace_ore_slot_at_screen_pos(pos):
+            manager.withdraw_ore(furnace_pos, player.inventory)
+            return
+
+        bag_index = furnace_bag_index_at_screen_pos(pos, len(player.inventory.slots))
+        if bag_index is None:
+            return
+        slot = player.inventory.slots[bag_index]
+        if slot.is_empty:
+            return
+
+        if slot.item_id in smelt_registry.all_fuel_item_ids():
+            if manager.deposit_fuel(furnace_pos, player.inventory, bag_index) == 0:
+                game_app.notifications.push_throttled("Furnace fuel slot is full")
+            return
+        if slot.item_id in smelt_registry.all_ore_item_ids():
+            if manager.deposit_ore(furnace_pos, player.inventory, bag_index) == 0:
+                game_app.notifications.push_throttled("Furnace ore slot is full")
+            return
+        game_app.notifications.push_throttled("The furnace can't use that")
 
     def _handle_inventory_click(self, pos, game_app) -> None:
         player = game_app.player
@@ -237,6 +307,7 @@ class InputHandler:
             game_app.inventory_open = False
             game_app.crafting_open = False
             game_app.skills_open = False
+            game_app.furnace_open = False
             self._close_chest(game_app)
             game_app.talking_to = npc
             game_app.npc_shop_open = False
@@ -288,6 +359,7 @@ class InputHandler:
         game_app.inventory_open = False
         game_app.crafting_open = False
         game_app.skills_open = False
+        game_app.furnace_open = False
         self._close_npc_panel(game_app)
         game_app.chest_open = True
         game_app.open_chest_pos = open_chest_pos
@@ -360,6 +432,8 @@ class InputHandler:
     def _handle_attack_click(self, pos, game_app) -> None:
         if game_app.paused:
             return
+        if self._try_open_station_screen(pos, game_app):
+            return
         player = game_app.player
         blocked_reason = player.blocked_weapon_class_reason()
         if blocked_reason is not None:
@@ -371,6 +445,61 @@ class InputHandler:
             game_app.projectiles.append(result)
         elif isinstance(result, Summon):
             game_app.summons = [result]
+
+    def _try_open_station_screen(self, pos, game_app) -> bool:
+        """Clicking directly on a placed Workbench opens the Crafting
+        screen; clicking a Furnace opens the Furnace screen -- each its
+        own separate screen now (see renderer._draw_crafting_screen /
+        _draw_furnace_screen), instead of the single "press C" screen
+        that used to show both crafting and smelting recipes together.
+        Skipped while a mining tool (pickaxe) is selected, so holding one
+        out to mine/relocate a placed station still works instead of the
+        click always being swallowed by opening its screen."""
+        player = game_app.player
+        selected = player.inventory.get_selected_item()
+        if selected is not None and item_registry.get(selected.item_id).is_tool:
+            return False
+        world_x, world_y = game_app.camera.screen_to_world(*pos)
+        tile_x, tile_y = int(world_x // TILE_SIZE), int(world_y // TILE_SIZE)
+        tile_id = game_app.world.get_tile(tile_x, tile_y)
+
+        if tile_id == tile_registry.WORKBENCH_ID and crafting_system.is_near_station(
+            game_app.world, player.center_x, player.center_y, tile_registry.WORKBENCH_ID,
+        ):
+            self._open_crafting_ui(game_app)
+            return True
+        if tile_id == tile_registry.FURNACE_ID and crafting_system.is_near_station(
+            game_app.world, player.center_x, player.center_y, tile_registry.FURNACE_ID,
+        ):
+            self._open_furnace_ui(game_app)
+            return True
+        return False
+
+    def _open_crafting_ui(self, game_app) -> None:
+        game_app.crafting_open = True
+        game_app.furnace_open = False
+        game_app.furnace_pos = None
+        game_app.inventory_open = False
+        game_app.skills_open = False
+        game_app.map_open = False
+        game_app.crafting_scroll_y = 0
+        self._close_npc_panel(game_app)
+        self._close_chest(game_app)
+
+    def _open_furnace_ui(self, game_app) -> None:
+        pos = nearest_station_tile(
+            game_app.world, game_app.player.center_x, game_app.player.center_y, tile_registry.FURNACE_ID,
+        )
+        if pos is None:
+            return
+        game_app.furnace_open = True
+        game_app.furnace_pos = pos
+        game_app.crafting_open = False
+        game_app.inventory_open = False
+        game_app.skills_open = False
+        game_app.map_open = False
+        self._close_npc_panel(game_app)
+        self._close_chest(game_app)
 
     def _handle_chest_click(self, pos, game_app) -> None:
         player = game_app.player
@@ -402,47 +531,68 @@ class InputHandler:
 
     def _handle_keydown(self, event, game_app) -> None:
         key = event.key
+        prefs = getattr(game_app, "prefs", None)
+        if getattr(game_app, "settings_open", False) and getattr(game_app, "rebinding_action", None):
+            self._finish_rebind(game_app, key)
+            return
         if key == pygame.K_ESCAPE:
             if getattr(game_app, "talking_to", None) is not None:
                 self._close_npc_panel(game_app)
             elif getattr(game_app, "chest_open", False):
                 self._close_chest(game_app)
+            elif getattr(game_app, "furnace_open", False):
+                game_app.furnace_open = False
+                game_app.furnace_pos = None
+            elif game_app.crafting_open:
+                game_app.crafting_open = False
+            elif game_app.inventory_open:
+                game_app.inventory_open = False
+            elif game_app.skills_open:
+                game_app.skills_open = False
+            elif getattr(game_app, "map_open", False):
+                game_app.map_open = False
             elif game_app.settings_open:
                 game_app.settings_open = False
+                if hasattr(game_app, "rebinding_action"):
+                    game_app.rebinding_action = None
             else:
                 game_app.paused = not game_app.paused
-        elif key == pygame.K_i:
+        elif key == bound_key(prefs, "inventory"):
             game_app.inventory_open = not game_app.inventory_open
             game_app.crafting_open = False
             game_app.skills_open = False
             game_app.map_open = False
+            game_app.furnace_open = False
             self._close_npc_panel(game_app)
             self._close_chest(game_app)
-        elif key == pygame.K_e:
+        elif key == bound_key(prefs, "use_accessory"):
             self._handle_use_accessory(game_app)
-        elif key == pygame.K_c:
+        elif key == bound_key(prefs, "crafting"):
             game_app.crafting_open = not game_app.crafting_open
             game_app.inventory_open = False
             game_app.skills_open = False
             game_app.map_open = False
+            game_app.furnace_open = False
             game_app.crafting_scroll_y = 0
             self._close_npc_panel(game_app)
             self._close_chest(game_app)
-        elif key == pygame.K_k:
+        elif key == bound_key(prefs, "skills"):
             game_app.skills_open = not game_app.skills_open
             game_app.inventory_open = False
             game_app.crafting_open = False
             game_app.map_open = False
+            game_app.furnace_open = False
             self._close_npc_panel(game_app)
             self._close_chest(game_app)
-        elif key == pygame.K_m:
+        elif key == bound_key(prefs, "map"):
             game_app.map_open = not game_app.map_open
             game_app.inventory_open = False
             game_app.crafting_open = False
             game_app.skills_open = False
+            game_app.furnace_open = False
             self._close_npc_panel(game_app)
             self._close_chest(game_app)
-        elif key == pygame.K_t:
+        elif key == bound_key(prefs, "interact"):
             self._handle_talk(game_app)
         elif key == pygame.K_F3:
             game_app.debug_overlay.toggle()
@@ -464,11 +614,11 @@ class InputHandler:
             game_app.debug_teleport_to(world_x, world_y)
         elif key == pygame.K_F11 and game_app.debug_mode:
             game_app.debug_teleport_to_spawn()
-        elif key == pygame.K_SPACE:
+        elif key == bound_key(prefs, "jump"):
             game_app.player.jump()
-        elif key == pygame.K_f:
+        elif key == bound_key(prefs, "eat"):
             game_app.player.eat_selected()
-        elif key == pygame.K_g:
+        elif key == bound_key(prefs, "summon_boss"):
             game_app.try_summon_boss()
         elif pygame.K_1 <= key <= pygame.K_9:
             game_app.player.inventory.select_hotbar(key - pygame.K_1)
@@ -477,6 +627,16 @@ class InputHandler:
         elif key == pygame.K_MINUS:
             game_app.camera.zoom_out()
 
+    def _finish_rebind(self, game_app, key: int) -> None:
+        if key == pygame.K_ESCAPE:
+            game_app.rebinding_action = None
+            return
+        if is_reserved_key(key):
+            game_app.notifications.push_throttled("That key is reserved")
+            return
+        game_app.set_binding(game_app.rebinding_action, key)
+        game_app.rebinding_action = None
+
     def update_continuous(self, dt: float, game_app) -> None:
         if game_app.paused:
             return
@@ -484,14 +644,21 @@ class InputHandler:
         player = game_app.player
         if not player.is_invulnerable():  # don't cancel knockback the instant it's applied
             keys = pygame.key.get_pressed()
-            if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            prefs = getattr(game_app, "prefs", None)
+            move_left = keys[bound_key(prefs, "move_left")] or extra_arrow_held(keys, prefs, "move_left")
+            move_right = keys[bound_key(prefs, "move_right")] or extra_arrow_held(keys, prefs, "move_right")
+            if move_left:
                 player.move_left()
-            elif keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            elif move_right:
                 player.move_right()
             else:
                 player.stop_horizontal()
 
-        if game_app.inventory_open or game_app.crafting_open or game_app.skills_open or getattr(game_app, "talking_to", None) is not None or getattr(game_app, "chest_open", False):
+        if (
+            game_app.inventory_open or game_app.crafting_open or game_app.skills_open
+            or getattr(game_app, "furnace_open", False)
+            or getattr(game_app, "talking_to", None) is not None or getattr(game_app, "chest_open", False)
+        ):
             return  # freeze mining/placing while browsing a menu
 
         mouse_buttons = pygame.mouse.get_pressed(num_buttons=3)

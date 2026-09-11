@@ -19,6 +19,7 @@ def test_load_returns_defaults_when_no_file_exists(tmp_path):
     prefs = settings_store.load(str(tmp_path / "does_not_exist.json"))
     assert prefs.music_volume == settings_store.MUSIC_VOLUME
     assert prefs.sfx_volume == settings_store.SFX_VOLUME
+    assert prefs.bindings["inventory"] == pygame.K_i
 
 
 def test_save_then_load_round_trips_values(tmp_path):

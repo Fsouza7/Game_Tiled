@@ -387,11 +387,47 @@ _register(ItemDef(
 ))
 
 _register(ItemDef(
+    id="iron_sword", name="Iron Sword",
+    description="Forged from a smelted Iron Bar. Hits harder than the wood sword.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.UNCOMMON, value=34, damage=14.0, speed=2.8,
+    max_durability=400, icon_key="iron_sword",
+    is_weapon=True, is_ranged=False,
+))
+
+_register(ItemDef(
+    id="steel_sword", name="Steel Sword",
+    description="Forged from Steel Bars. Hits harder than the iron sword.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.RARE, value=58, damage=20.0, speed=2.6,
+    max_durability=600, icon_key="steel_sword",
+    is_weapon=True, is_ranged=False,
+))
+
+_register(ItemDef(
     id="wood_bow", name="Wood Bow",
     description="A simple bow. Fires an arrow per shot; needs arrows in the inventory.",
     category=ItemCategory.WEAPON, max_stack=1,
     rarity=ItemRarity.UNCOMMON, value=20, damage=6.0, speed=1.5,
     max_durability=60, icon_key="wood_bow",
+    is_weapon=True, is_ranged=True, ammo_item_id="arrow",
+))
+
+_register(ItemDef(
+    id="iron_bow", name="Iron Bow",
+    description="A reinforced bow with an iron-strung frame. Fires an arrow per shot; needs arrows in the inventory.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.RARE, value=42, damage=11.0, speed=1.4,
+    max_durability=300, icon_key="iron_bow",
+    is_weapon=True, is_ranged=True, ammo_item_id="arrow",
+))
+
+_register(ItemDef(
+    id="steel_bow", name="Steel Bow",
+    description="A hardened steel bow with a stiffer draw. Fires an arrow per shot; needs arrows in the inventory.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.RARE, value=65, damage=16.0, speed=1.3,
+    max_durability=450, icon_key="steel_bow",
     is_weapon=True, is_ranged=True, ammo_item_id="arrow",
 ))
 
@@ -409,6 +445,17 @@ _register(ItemDef(
     rarity=ItemRarity.EPIC, value=88, damage=10.0, speed=2.0,
     max_durability=200, icon_key="arcane_staff",
     is_weapon=True, is_ranged=True, uses_magic=True,
+    crit_chance=0.1, crit_damage_mult=1.4,
+))
+
+_register(ItemDef(
+    id="arcane_sword", name="Arcane Sword",
+    description="Forged from an Arcane Bar and etched with a crackling edge. Hits harder than steel and can land a critical strike.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.EPIC, value=100, damage=28.0, speed=3.0,
+    max_durability=520, icon_key="arcane_sword",
+    is_weapon=True, is_ranged=False,
+    crit_chance=0.15, crit_damage_mult=1.6,
 ))
 
 # --- Summon rods (Summoner-class-only weapons; see class_registry.py and
@@ -431,6 +478,24 @@ _register(ItemDef(
     rarity=ItemRarity.RARE, value=40, speed=1.2,
     icon_key="summon_rod_iron",
     is_weapon=True, is_ranged=False, weapon_class="summon", summons_id="iron_guardian",
+))
+
+_register(ItemDef(
+    id="summon_rod_steel", name="Steel Rod",
+    description="A rod forged from hardened Steel Bars. Summons a Steel Colossus, sturdier still than the Iron Guardian.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.RARE, value=65, speed=1.3,
+    icon_key="summon_rod_steel",
+    is_weapon=True, is_ranged=False, weapon_class="summon", summons_id="steel_colossus",
+))
+
+_register(ItemDef(
+    id="summon_rod_arcane", name="Arcane Rod",
+    description="A rod bound from an Arcane Bar. Summons an Arcane Familiar, the strongest minion available.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.EPIC, value=110, speed=1.3,
+    icon_key="summon_rod_arcane",
+    is_weapon=True, is_ranged=False, weapon_class="summon", summons_id="arcane_familiar",
 ))
 
 # --- Armor (equip via the inventory screen; see game/inventory/equipment.py) ---
@@ -540,8 +605,112 @@ _register(ItemDef(
     light_emit=ARCANE_HELM_LIGHT_EMIT,
 ))
 
+_register(ItemDef(
+    id="arcane_body", name="Arcane Robe",
+    description="Forged from an Arcane Bar. Stronger than steel.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.EPIC, value=130, max_durability=420,
+    icon_key="arcane_body", equip_slot="body", defense=16.0,
+))
+
+_register(ItemDef(
+    id="arcane_greaves", name="Arcane Greaves",
+    description="Forged from an Arcane Bar. Stronger than steel.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.EPIC, value=95, max_durability=320,
+    icon_key="arcane_greaves", equip_slot="legs", defense=11.0,
+))
+
+_register(ItemDef(
+    id="arcane_boots", name="Arcane Boots",
+    description="Forged from an Arcane Bar. Stronger than steel.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.EPIC, value=62, max_durability=250,
+    icon_key="arcane_boots", equip_slot="boots", defense=7.0,
+))
+
 # --- Accessory (equip via the inventory screen; unlike armor, actively
 # used with E -- see Player.try_use_accessory, game/entities/grapple.py) ---
+
+
+# --- Post-Arcane tier: Voidstone / Voidsteel (a brand-new material tier one
+# step above Arcane in every stat -- Voidstone is a universal, very-deep-
+# only ore, see tile_registry.VOID_ORE_ID and world_generator._void_ore_roll.
+# It smelts into a Voidsteel Bar (see smelt_registry.py) which forges the
+# strongest sword, full armor set, accessory and Summoner rod in the game.
+# All EPIC rarity, all crafted at the existing Workbench. ---
+
+_register(ItemDef(
+    id="voidstone", name="Voidstone",
+    description="A pitch-black ore laced with faint violet veins, found only in the deepest, most dangerous caverns -- far below where Iron or any gem turns up. Smelt it at a Furnace (with Coal as fuel) into a Voidsteel Bar.",
+    category=ItemCategory.ORE, max_stack=DEFAULT_STACK_SIZE,
+    rarity=ItemRarity.EPIC, value=200, icon_key="voidstone",
+))
+
+_register(ItemDef(
+    id="voidsteel_bar", name="Voidsteel Bar",
+    description="Smelted from Voidstone and Coal -- the slowest, toughest smelt there is. Forges the strongest gear in the game.",
+    category=ItemCategory.MATERIAL, max_stack=DEFAULT_STACK_SIZE,
+    rarity=ItemRarity.EPIC, value=260, icon_key="voidsteel_bar",
+))
+
+_register(ItemDef(
+    id="voidsteel_sword", name="Voidsteel Sword",
+    description="A blade forged from Voidsteel. Left-click near an enemy to swing it -- the hardest-hitting melee weapon in the game.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.EPIC, value=220, damage=38.0, speed=3.5,
+    max_durability=700, icon_key="voidsteel_sword",
+    is_weapon=True, is_ranged=False,
+))
+
+_register(ItemDef(
+    id="voidsteel_helmet", name="Voidsteel Helm",
+    description="Head armor forged from Voidsteel. The strongest helmet in the game.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.EPIC, value=200, max_durability=500,
+    icon_key="voidsteel_helmet", equip_slot="head", defense=19.0,
+))
+
+_register(ItemDef(
+    id="voidsteel_armor", name="Voidsteel Armor",
+    description="A Voidsteel chestpiece. The strongest body armor in the game.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.EPIC, value=260, max_durability=560,
+    icon_key="voidsteel_armor", equip_slot="body", defense=21.0,
+))
+
+_register(ItemDef(
+    id="voidsteel_greaves", name="Voidsteel Greaves",
+    description="Voidsteel leg armor. The strongest leg armor in the game.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.EPIC, value=210, max_durability=500,
+    icon_key="voidsteel_greaves", equip_slot="legs", defense=14.5,
+))
+
+_register(ItemDef(
+    id="voidsteel_boots", name="Voidsteel Boots",
+    description="Voidsteel boots. The strongest boots in the game.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.EPIC, value=160, max_durability=440,
+    icon_key="voidsteel_boots", equip_slot="boots", defense=10.5,
+))
+
+_register(ItemDef(
+    id="voidstone_amulet", name="Voidstone Amulet",
+    description="Equip in the accessory slot. A raw, uncut shard of Voidstone that radiates protection and an eerie violet light.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.EPIC, value=180, max_durability=None,
+    icon_key="voidstone_amulet", equip_slot="accessory", defense=8.0, light_emit=13,
+))
+
+_register(ItemDef(
+    id="summon_rod_voidsteel", name="Voidsteel Rod",
+    description="A rod forged from Voidsteel, humming with contained power. Summons a Void Wraith -- the most powerful minion a Summoner can call.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.EPIC, value=220, speed=1.4,
+    icon_key="summon_rod_voidsteel",
+    is_weapon=True, is_ranged=False, weapon_class="summon", summons_id="void_wraith",
+))
 
 _register(ItemDef(
     id="grapple_hook", name="Grapple Hook",
@@ -549,6 +718,38 @@ _register(ItemDef(
     category=ItemCategory.ACCESSORY, max_stack=1,
     rarity=ItemRarity.UNCOMMON, value=30, max_durability=None,
     icon_key="grapple_hook", equip_slot="accessory", accessory_kind="grapple_hook",
+))
+
+_register(ItemDef(
+    id="warriors_charm", name="Warrior's Charm",
+    description="Equip in the accessory slot. A sturdy charm worn by front-line fighters -- passively reduces incoming damage.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.RARE, value=45, max_durability=None,
+    icon_key="warriors_charm", equip_slot="accessory", defense=6.0,
+))
+
+_register(ItemDef(
+    id="summoners_trinket", name="Summoner's Trinket",
+    description="Equip in the accessory slot. A faintly glowing trinket favored by summoners -- passively reduces incoming damage and lights up nearby tiles.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.RARE, value=45, max_durability=None,
+    icon_key="summoners_trinket", equip_slot="accessory", defense=3.0, light_emit=6,
+))
+
+_register(ItemDef(
+    id="swift_anklet", name="Swift Anklet",
+    description="Equip in the accessory slot for a passive boost to move speed.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.RARE, value=45, max_durability=None,
+    icon_key="swift_anklet", equip_slot="accessory", move_speed_bonus=1.0,
+))
+
+_register(ItemDef(
+    id="arcane_anklet", name="Arcane Anklet",
+    description="Equip in the accessory slot for a stronger passive boost to move speed, woven from an Arcane Bar.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.EPIC, value=95, max_durability=None,
+    icon_key="arcane_anklet", equip_slot="accessory", move_speed_bonus=1.5,
 ))
 
 # --- Consumable: food (fully functional -- eat with F to heal; obtained
@@ -678,6 +879,111 @@ _register(ItemDef(
     rarity=ItemRarity.EPIC, value=140, max_durability=400,
     equip_slot="head", defense=16.0,
     icon_key="slime_king_crown",
+))
+
+# Two more Slime-King-themed recipes off the same exclusive drop (see
+# recipe_registry.py) -- a farmable alternative/side-grade to the Voidsteel
+# tier above, not strictly required progression. Each still costs its own
+# 1x slime_king_core, so a full themed set means multiple boss kills, same
+# as the existing Crown.
+
+_register(ItemDef(
+    id="slime_king_fang", name="Fang of the Slime King",
+    description="A blade carved from the Slime King's crystallized Core and hardened Steel. A farmable weapon, competitive with the deepest ore tier.",
+    category=ItemCategory.WEAPON, max_stack=1,
+    rarity=ItemRarity.EPIC, value=170, damage=30.0, speed=3.2,
+    max_durability=450, icon_key="slime_king_fang",
+    is_weapon=True, is_ranged=False,
+))
+
+_register(ItemDef(
+    id="slime_king_bulwark", name="Bulwark of the Slime King",
+    description="A chestpiece forged from the Slime King's Core and Steel. A farmable body armor, competitive with the deepest ore tier.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.EPIC, value=175, max_durability=420,
+    icon_key="slime_king_bulwark", equip_slot="body", defense=18.0,
+))
+
+
+# --- Biome exclusive mobs (Snow Frost Hopper / Jungle Swamp Mosquito) ---
+# Drops plus one craft each so farming them isn't a dead end. frost_arrows
+# is ammo both Warrior and Summoner can spend; wing_charm is a light
+# accessory that doesn't invent a new ammo type.
+
+_register(ItemDef(
+    id="frost_shard", name="Frost Shard",
+    description="A sliver of permafrost shed by a Frost Hopper.",
+    category=ItemCategory.MATERIAL, max_stack=DEFAULT_STACK_SIZE,
+    rarity=ItemRarity.UNCOMMON, value=4, icon_key="frost_shard",
+))
+
+_register(ItemDef(
+    id="mosquito_wing", name="Mosquito Wing",
+    description="A translucent wing torn from a Jungle mosquito.",
+    category=ItemCategory.MATERIAL, max_stack=DEFAULT_STACK_SIZE,
+    rarity=ItemRarity.COMMON, value=3, icon_key="mosquito_wing",
+))
+
+_register(ItemDef(
+    id="wing_charm", name="Wing Charm",
+    description="A light charm woven from mosquito wings. Equip in the accessory slot -- faintly lights nearby tiles.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.UNCOMMON, value=18, max_durability=None,
+    icon_key="wing_charm", equip_slot="accessory", light_emit=4,
+))
+
+# --- Dead-end material sinks (cactus fiber besides cactus-arrows, duskwing
+# feathers besides the rare anklets, gem bars besides the Arcane Bar) plus
+# a craftable potion so slime gel and apples combine into a mid-heal
+# consumable. Stats stay between wood and iron / well below Voidsteel --
+# these fill obtain-path holes, they are not a new power tier. ---
+
+_register(ItemDef(
+    id="healing_potion", name="Healing Potion",
+    description="A mixed tonic of fruit and slime gel. Press F to drink and restore 40 HP -- more than a raw apple, without matching late-game food.",
+    category=ItemCategory.CONSUMABLE, max_stack=DEFAULT_STACK_SIZE,
+    rarity=ItemRarity.UNCOMMON, value=8, icon_key="healing_potion", heal_amount=40.0,
+))
+
+_register(ItemDef(
+    id="cactus_jerkin", name="Cactus Jerkin",
+    description="A desert-stitched chestpiece of cactus fiber over a wood frame. Stronger than wood armor, weaker than iron -- a reason to gather cactus besides arrows.",
+    category=ItemCategory.ARMOR, max_stack=1,
+    rarity=ItemRarity.UNCOMMON, value=36, max_durability=180,
+    icon_key="cactus_jerkin", equip_slot="body", defense=8.0,
+))
+
+_register(ItemDef(
+    id="feather_charm", name="Feather Charm",
+    description="A light charm bound from duskwing feathers. Equip in the accessory slot for a small move-speed boost.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.COMMON, value=12, max_durability=None,
+    icon_key="feather_charm", equip_slot="accessory",
+    move_speed_bonus=0.5, defense=1.0,
+))
+
+_register(ItemDef(
+    id="topaz_ring", name="Topaz Ring",
+    description="A ring set with a Topaz Bar. Equip in the accessory slot for a chance to land critical hits -- a use for Topaz Bars besides the Arcane Bar.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.UNCOMMON, value=48, max_durability=None,
+    icon_key="topaz_ring", equip_slot="accessory", crit_chance=0.05,
+))
+
+_register(ItemDef(
+    id="sapphire_ring", name="Sapphire Ring",
+    description="A ring set with a Sapphire Bar. Equip in the accessory slot for extra defense and a modest worn light -- a use for Sapphire Bars besides the Arcane Bar.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.UNCOMMON, value=48, max_durability=None,
+    icon_key="sapphire_ring", equip_slot="accessory", defense=4.0, light_emit=8,
+))
+
+_register(ItemDef(
+    id="emerald_ring", name="Emerald Ring",
+    description="A ring set with an Emerald Bar. Equip in the accessory slot for a move-speed boost -- a use for Emerald Bars besides the Arcane Bar.",
+    category=ItemCategory.ACCESSORY, max_stack=1,
+    rarity=ItemRarity.UNCOMMON, value=48, max_durability=None,
+    icon_key="emerald_ring", equip_slot="accessory", move_speed_bonus=0.8,
 ))
 
 

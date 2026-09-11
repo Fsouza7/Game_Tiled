@@ -8,8 +8,11 @@ from game.entities.enemy_def import EnemyDef
 
 
 class Boss(Enemy):
-    def __init__(self, enemy_def: EnemyDef, spawn_x_px: float, spawn_y_px: float):
-        super().__init__(enemy_def, spawn_x_px, spawn_y_px)
+    def __init__(
+        self, enemy_def: EnemyDef, spawn_x_px: float, spawn_y_px: float,
+        health_multiplier: float = 1.0, damage_multiplier: float = 1.0,
+    ):
+        super().__init__(enemy_def, spawn_x_px, spawn_y_px, health_multiplier, damage_multiplier)
         self.phase_index = 0  # 0/1/2 -- see BOSS_PHASE_2/3_HEALTH_RATIO
         self.ranged_cooldown_remaining = 1.0
         self.enraged = False  # guards the one-shot minion summon on entering phase 2 (index)

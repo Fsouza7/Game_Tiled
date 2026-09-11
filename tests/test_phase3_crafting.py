@@ -199,32 +199,43 @@ def test_crafting_panel_height_has_a_floor_with_nothing_discovered():
 
 
 def test_crafting_panel_height_still_grows_for_a_lot_of_discovered_content():
-    from game.rendering.renderer import crafting_panel_height, CRAFTING_MIN_PANEL_HEIGHT, CRAFTING_VIEWPORT_HEIGHT, CRAFTING_TITLE_HEIGHT
+    from game.rendering.renderer import (
+        crafting_panel_height, CRAFTING_MIN_PANEL_HEIGHT, CRAFTING_VIEWPORT_HEIGHT,
+        CRAFTING_TITLE_HEIGHT, CRAFTING_FILTER_BAR_HEIGHT,
+    )
 
     height = crafting_panel_height(discovered_item_ids=_every_item_id())
     assert height > CRAFTING_MIN_PANEL_HEIGHT  # the floor doesn't cap a panel that has real content
-    assert height <= CRAFTING_TITLE_HEIGHT + CRAFTING_VIEWPORT_HEIGHT  # still respects the scroll-viewport ceiling
+    # still respects the scroll-viewport ceiling (title + rarity/craftable filter bar + grid viewport)
+    assert height <= CRAFTING_TITLE_HEIGHT + CRAFTING_FILTER_BAR_HEIGHT + CRAFTING_VIEWPORT_HEIGHT
 
 
-def test_recipes_are_grouped_by_result_category_with_a_trailing_smelting_section():
+def test_recipes_are_grouped_by_result_category_and_smelting_recipes_are_not_included():
+    """The Crafting screen (this module) and the Furnace screen are
+    separate now (user feedback: "quando eu clicar em ambos ai sim deve
+    abrir a tela deles, cada um separado") -- _recipe_sections only ever
+    covers recipe_registry (hand/workbench crafts); smelt_registry's ore
+    -> bar recipes live entirely in the Furnace screen's own queue (see
+    furnace_system.py) and never appear here."""
     from game.rendering.renderer import _recipe_sections, _CATEGORY_SECTION_ORDER
     from game.crafting import smelt_registry
 
     title_to_category = {title: category for category, title in _CATEGORY_SECTION_ORDER}
     sections = _recipe_sections(discovered_item_ids=_every_item_id())
 
-    assert sections[-1][0] == "Smelting (Furnace)"
-    assert {r.id for r in sections[-1][1]} == {r.id for r in smelt_registry.all_recipes()}
+    assert all(title != "Smelting (Furnace)" for title, _ in sections)
+    section_recipe_ids = {r.id for _, recipes in sections for r in recipes}
+    assert section_recipe_ids.isdisjoint({r.id for r in smelt_registry.all_recipes()})
 
-    for title, recipes in sections[:-1]:
+    for title, recipes in sections:
         expected_category = title_to_category[title]
         for recipe in recipes:
             assert item_registry.get(recipe.result_item_id).category == expected_category
 
-    # With every ingredient discovered, every registered recipe (crafting +
-    # smelting) appears in exactly one section.
+    # With every ingredient discovered, every registered crafting recipe
+    # (not smelting -- see above) appears in exactly one section.
     total_in_sections = sum(len(recipes) for _, recipes in sections)
-    assert total_in_sections == len(recipe_registry.all_recipes()) + len(smelt_registry.all_recipes())
+    assert total_in_sections == len(recipe_registry.all_recipes())
 
 
 def test_crafting_scroll_clamps_and_click_hit_test_respects_it():

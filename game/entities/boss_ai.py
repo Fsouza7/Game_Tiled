@@ -65,7 +65,7 @@ def update(boss: Boss, world: World, player, dt: float) -> Tuple[List[EnemyProje
     if not boss.alive:
         return [], []
 
-    ratio = boss.health / boss.enemy_def.max_health
+    ratio = boss.health / boss.max_health
     new_phase = _phase_for_ratio(ratio)
     minions: List[Enemy] = []
     if new_phase > boss.phase_index:
@@ -90,10 +90,16 @@ def update(boss: Boss, world: World, player, dt: float) -> Tuple[List[EnemyProje
 
 def _spawn_minions(boss: Boss) -> List[Enemy]:
     minion_def = enemy_registry.get(SLIME_MINION_ID)
+    # Minions match the boss's own difficulty scaling (see
+    # game/entities/difficulty.py) -- derived from the boss's already-
+    # scaled stats rather than needing day_count threaded all the way
+    # down here, so they're never a soft spot on a harder day.
+    health_mult = boss.max_health / boss.enemy_def.max_health
+    damage_mult = boss.contact_damage / boss.enemy_def.contact_damage
     minions = []
     for i in range(SLIME_KING_MINION_COUNT):
         offset = (i // 2 + 1) * TILE_SIZE * (1 if i % 2 == 0 else -1)
-        minions.append(Enemy(minion_def, boss.center_x + offset, boss.y))
+        minions.append(Enemy(minion_def, boss.center_x + offset, boss.y, health_mult, damage_mult))
     return minions
 
 

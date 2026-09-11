@@ -10,7 +10,7 @@ import random
 from typing import List, Optional, Tuple
 
 from game.entities.enemy import Enemy
-from game.entities import enemy_registry
+from game.entities import enemy_registry, difficulty
 from game.entities.enemy_def import SpawnTime, AIType
 from game.settings import (
     TILE_SIZE, ENEMY_MAX_ALIVE_DAY, ENEMY_MAX_ALIVE_NIGHT, ENEMY_MAX_ALIVE_UNDERGROUND,
@@ -33,7 +33,7 @@ class EnemySpawner:
     def __init__(self):
         self.time_until_next_spawn = ENEMY_SPAWN_INTERVAL_DAY_S
 
-    def update(self, dt: float, world: World, player, enemies: List[Enemy], is_night: bool) -> None:
+    def update(self, dt: float, world: World, player, enemies: List[Enemy], is_night: bool, day_count: int = 1) -> None:
         self._despawn_far_enemies(player, enemies)
 
         max_alive, spawn_interval, underground = self._current_limits(world, player, is_night)
@@ -46,7 +46,7 @@ class EnemySpawner:
         if len(enemies) >= max_alive:
             return
 
-        spawned = self._try_spawn(world, player, is_night, underground)
+        spawned = self._try_spawn(world, player, is_night, underground, day_count)
         if spawned is not None:
             enemies.append(spawned)
 
@@ -70,7 +70,7 @@ class EnemySpawner:
             if distance_tiles > ENEMY_DESPAWN_DISTANCE_TILES:
                 enemy.alive = False
 
-    def _try_spawn(self, world: World, player, is_night: bool, underground: bool):
+    def _try_spawn(self, world: World, player, is_night: bool, underground: bool, day_count: int = 1):
         player_tile_x = int(player.center_x // TILE_SIZE)
         direction = random.choice((-1, 1))
         distance = random.randint(ENEMY_SPAWN_MIN_DISTANCE_TILES, ENEMY_SPAWN_MAX_DISTANCE_TILES)
@@ -90,7 +90,15 @@ class EnemySpawner:
         else:
             spawn_y = _spawn_y_tiles(world, spawn_x, enemy_def)
 
-        return Enemy(enemy_def, spawn_x * TILE_SIZE, spawn_y * TILE_SIZE)
+        # Day-based difficulty scaling (see game/entities/difficulty.py) --
+        # baked into the instance at spawn time, so a mob spawned later in
+        # the playthrough is tougher than one spawned on day 1, without
+        # retroactively buffing anything already alive.
+        return Enemy(
+            enemy_def, spawn_x * TILE_SIZE, spawn_y * TILE_SIZE,
+            health_multiplier=difficulty.health_multiplier(day_count),
+            damage_multiplier=difficulty.damage_multiplier(day_count),
+        )
 
     def _pick_weighted_enemy(self, is_night: bool, biome_id: Optional[str] = None):
         eligible = [

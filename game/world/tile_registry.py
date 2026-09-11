@@ -57,6 +57,7 @@ DOOR_CLOSED_ID = 40
 DOOR_OPEN_ID = 41
 BED_ID = 42
 TREE_ID = 43
+VOID_ORE_ID = 44
 
 _TILES: Dict[int, TileDef] = {}
 
@@ -248,6 +249,19 @@ _register(TileDef(
     id=EMERALD_ORE_ID, name="Emerald Ore", category=TileCategory.ORE,
     color=(50, 180, 110), solid=True, resistance=3.5, required_tool="pickaxe",
     drop_item_id="emerald", can_place=False, can_break=True,
+))
+
+# --- Voidstone Ore: a universal, very-deep-only ore one tier above every
+# biome-exclusive gem and above Iron/Coal -- see world_generator.py's
+# "_void_ore_roll" and settings.VOID_ORE_MIN_DEPTH_BELOW_SURFACE /
+# VOID_ORE_SPAWN_CHANCE. Not biome-locked (no exclusive_ore_tile_id entry
+# needed in biome_registry.py); it can turn up under any biome, just much
+# deeper and much rarer than Iron. Tougher to mine than any existing ore. ---
+
+_register(TileDef(
+    id=VOID_ORE_ID, name="Voidstone Ore", category=TileCategory.ORE,
+    color=(70, 20, 100), solid=True, resistance=4.0, required_tool="pickaxe",
+    drop_item_id="voidstone", can_place=False, can_break=True,
 ))
 
 # --- Berry bush: a rare surface spawn (see world_generator.py

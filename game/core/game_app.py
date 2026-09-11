@@ -11,10 +11,10 @@ from game.settings import (
     SLEEP_FADE_DURATION_S, DEBUG_RESTOCK_COINS, DEBUG_SPAWN_SPACING_TILES,
 )
 from game.world.world import World
-from game.world.tile_registry import PERSONAL_CHEST_ID
+from game.world.tile_registry import PERSONAL_CHEST_ID, FURNACE_ID
 from game.world import checkpoints
 from game.entities.player import Player
-from game.entities import enemy_ai, boss_ai, enemy_registry, summon_ai, character_registry, class_registry
+from game.entities import enemy_ai, boss_ai, enemy_registry, summon_ai, character_registry, class_registry, difficulty
 from game.entities.boss import Boss
 from game.entities.enemy import Enemy
 from game.entities.enemy_def import AIType
@@ -71,6 +71,7 @@ class GameApp:
         # A dev-session toggle like `prefs` -- not reset by _new_run/
         # Restart/Load, since it has nothing to do with "one playthrough".
         self.debug_mode = False
+        self.rebinding_action = None
 
         # Boot order: title (Continue / New Game) -> character select ->
         # class select. Player already exists with the default skin/class
@@ -119,7 +120,13 @@ class GameApp:
         self.inventory_open = False
         self.crafting_open = False
         self.crafting_scroll_y = 0
+        # Rarity filter tab (None or an ItemRarity) and the "craftable now"
+        # toggle on the Crafting screen (see renderer._recipe_sections) --
+        # session-only UI state, not persisted across save/load.
+        self.crafting_filter_rarity = None
+        self.crafting_filter_craftable_only = False
         self.settings_open = False
+        self.rebinding_action = None
         self.skills_open = False
         self.selected_skill_id = "attack"
         self.talking_to = None
@@ -130,6 +137,14 @@ class GameApp:
         # tuple = a specific world-generated loot Chest (see
         # active_chest_inventory / InputHandler._open_chest_ui).
         self.open_chest_pos = None
+        # The Furnace screen -- opened by clicking a placed Furnace tile
+        # (see InputHandler._try_open_station_screen), separate from the
+        # Crafting screen it used to share. furnace_pos names which
+        # furnace's input hopper (FurnaceManager.inputs) the screen is
+        # showing, fixed at open time so it doesn't jump to a different
+        # furnace if two are in range.
+        self.furnace_open = False
+        self.furnace_pos = None
 
     def restart(self) -> None:
         self._new_run(self.seed, self.player.character_id, self.player.class_id)
@@ -144,6 +159,28 @@ class GameApp:
         sfx.set_volume(self.prefs.sfx_volume)
         settings_store.save(self.prefs, settings_store.SETTINGS_FILE_PATH)
         sfx.play("ui_tick")  # immediate feedback for the level just set
+
+    def set_binding(self, action: str, key: int) -> None:
+        """Assigns `key` to `action`, swapping with whoever already owned
+        it so two actions can never share a key. Persists immediately,
+        same as volume clicks."""
+        from game.input.bindings import DEFAULT_BINDINGS, action_using_key
+
+        if action not in DEFAULT_BINDINGS:
+            return
+        previous = self.prefs.bindings.get(action)
+        occupant = action_using_key(self.prefs.bindings, key)
+        self.prefs.bindings[action] = key
+        if occupant is not None and occupant != action and previous is not None:
+            self.prefs.bindings[occupant] = previous
+        settings_store.save(self.prefs, settings_store.SETTINGS_FILE_PATH)
+
+    def reset_bindings(self) -> None:
+        from game.input.bindings import DEFAULT_BINDINGS
+
+        self.prefs.bindings = dict(DEFAULT_BINDINGS)
+        self.rebinding_action = None
+        settings_store.save(self.prefs, settings_store.SETTINGS_FILE_PATH)
 
     def grant_class_starting_item(self) -> None:
         """Grants the player's class starting item, if it has one (e.g.
@@ -199,7 +236,10 @@ class GameApp:
         self.inventory_open = False
         self.crafting_open = False
         self.crafting_scroll_y = 0
+        self.crafting_filter_rarity = None
+        self.crafting_filter_craftable_only = False
         self.settings_open = False
+        self.rebinding_action = None
         self.skills_open = False
         self.selected_skill_id = "attack"
         self.talking_to = None
@@ -210,6 +250,8 @@ class GameApp:
         self.class_select_open = False
         self.chest_open = False
         self.open_chest_pos = None
+        self.furnace_open = False
+        self.furnace_pos = None
 
         self.notifications.push("Game loaded")
         logger.info("Loaded game from %s", save_system.SAVE_FILE_PATH)
@@ -267,9 +309,10 @@ class GameApp:
             self._harvest_damage_popups()
             self._collect_enemy_drops()
             self.enemies = [e for e in self.enemies if e.alive]
-            self.enemy_spawner.update(dt, self.world, self.player, self.enemies, self.world_clock.is_night)
+            self.enemy_spawner.update(dt, self.world, self.player, self.enemies, self.world_clock.is_night, self.world_clock.day_count)
             self._update_npcs()
             self._close_chest_if_out_of_range()
+            self._close_furnace_if_out_of_range()
 
             self._update_footstep_dust(dt)
             self._handle_checkpoint_activation()
@@ -297,6 +340,10 @@ class GameApp:
             chest_storage=self.active_chest_inventory() if self.chest_open else None,
             enemy_projectiles=self.enemy_projectiles, map_open=self.map_open,
             prefs=self.prefs, sleep_fade_ratio=self.sleep_fade_remaining_s / SLEEP_FADE_DURATION_S,
+            furnace_open=self.furnace_open, furnace_pos=self.furnace_pos,
+            crafting_filter_rarity=self.crafting_filter_rarity,
+            crafting_filter_craftable_only=self.crafting_filter_craftable_only,
+            rebinding_action=self.rebinding_action,
         )
         self.debug_overlay.draw(
             self.window, self.clock, self.player, self.world, self.camera, self.enemies, self.world_clock,
@@ -319,7 +366,11 @@ class GameApp:
         offset = TILE_SIZE * 4 * (1 if self.player.facing_right else -1)
         spawn_x = self.player.center_x + offset - (boss_def.width_tiles * TILE_SIZE) / 2
         spawn_y = self.player.center_y - (boss_def.height_tiles * TILE_SIZE) / 2
-        self.enemies.append(Boss(boss_def, spawn_x, spawn_y))
+        self.enemies.append(Boss(
+            boss_def, spawn_x, spawn_y,
+            health_multiplier=difficulty.health_multiplier(self.world_clock.day_count),
+            damage_multiplier=difficulty.damage_multiplier(self.world_clock.day_count),
+        ))
         self.notifications.push(f"{boss_def.name} has appeared!")
 
     # --- debug/cheat tools (F4 toggles debug_mode; F5-F11 while it's on --
@@ -345,6 +396,8 @@ class GameApp:
     def debug_spawn_all_bosses(self) -> None:
         """Bypasses try_summon_boss's idol/one-at-a-time gating entirely --
         this is a raw debug spawn, not the normal summon path."""
+        health_mult = difficulty.health_multiplier(self.world_clock.day_count)
+        damage_mult = difficulty.damage_multiplier(self.world_clock.day_count)
         spawned = 0
         for enemy_def in enemy_registry.all_enemies():
             if enemy_def.ai_type != AIType.BOSS:
@@ -352,11 +405,13 @@ class GameApp:
             offset = TILE_SIZE * (4 + spawned * DEBUG_SPAWN_SPACING_TILES)
             spawn_x = self.player.center_x - offset - (enemy_def.width_tiles * TILE_SIZE) / 2
             spawn_y = self.player.center_y - (enemy_def.height_tiles * TILE_SIZE) / 2
-            self.enemies.append(Boss(enemy_def, spawn_x, spawn_y))
+            self.enemies.append(Boss(enemy_def, spawn_x, spawn_y, health_mult, damage_mult))
             spawned += 1
         self.notifications.push(f"Debug: spawned {spawned} boss(es)" if spawned else "Debug: no bosses registered")
 
     def debug_spawn_all_enemies(self) -> None:
+        health_mult = difficulty.health_multiplier(self.world_clock.day_count)
+        damage_mult = difficulty.damage_multiplier(self.world_clock.day_count)
         spawned = 0
         for enemy_def in enemy_registry.all_enemies():
             if enemy_def.ai_type == AIType.BOSS:
@@ -364,7 +419,7 @@ class GameApp:
             offset = TILE_SIZE * (3 + spawned * DEBUG_SPAWN_SPACING_TILES)
             spawn_x = self.player.center_x + offset
             spawn_y = self.player.y
-            self.enemies.append(Enemy(enemy_def, spawn_x, spawn_y))
+            self.enemies.append(Enemy(enemy_def, spawn_x, spawn_y, health_mult, damage_mult))
             spawned += 1
         self.notifications.push(f"Debug: spawned {spawned} enemy types")
 
@@ -409,6 +464,16 @@ class GameApp:
         if max(abs(tile_x - center_tx), abs(tile_y - center_ty)) > STATION_SEARCH_RADIUS_TILES:
             self.chest_open = False
             self.open_chest_pos = None
+
+    def _close_furnace_if_out_of_range(self) -> None:
+        if not self.furnace_open or self.furnace_pos is None:
+            return
+        tile_x, tile_y = self.furnace_pos
+        center_tx = int(self.player.center_x // TILE_SIZE)
+        center_ty = int(self.player.center_y // TILE_SIZE)
+        if max(abs(tile_x - center_tx), abs(tile_y - center_ty)) > STATION_SEARCH_RADIUS_TILES:
+            self.furnace_open = False
+            self.furnace_pos = None
 
     def _update_npcs(self) -> None:
         newly = self.npc_spawner.update(self.world, self.player, self.npcs)

@@ -7,7 +7,7 @@ import pygame  # noqa: F401
 from game.settings import DEFAULT_SEED, WORLD_WIDTH_TILES, TILE_SIZE, CHUNK_WIDTH
 from game.entities.player import Player
 from game.world.world import World
-from game.world.tile_registry import FURNACE_ID, STONE_ID
+from game.world.tile_registry import FURNACE_ID, STONE_ID, WORKBENCH_ID
 from game.items import item_registry
 from game.crafting import recipe_registry, crafting_system, smelt_registry
 from game.crafting.furnace_system import FurnaceManager, nearest_station_tile
@@ -489,6 +489,235 @@ def test_furnace_can_start_a_new_job_after_the_previous_one_completes():
 
     started_again = manager.start_smelt(recipe, player.inventory, world, player.center_x, player.center_y)
     assert started_again is True
+
+
+# --- Furnace queue (deposit ore/fuel into the furnace's own input hopper,
+# FurnaceManager keeps auto-starting the next batch on its own -- the
+# Furnace screen's actual interaction; see furnace_system.py's docstring) ---
+
+def _slot_index_of(inventory, item_id: str) -> int:
+    return next(i for i, s in enumerate(inventory.slots) if s.item_id == item_id)
+
+
+def test_deposit_fuel_and_ore_fill_the_furnace_input_hopper():
+    world, player = _make_player()
+    pos = _place_furnace_near_player(world, player)
+    manager = FurnaceManager()
+    player.inventory.add_item("coal", 5)
+    player.inventory.add_item("iron_ore", 10)
+
+    moved_fuel = manager.deposit_fuel(pos, player.inventory, _slot_index_of(player.inventory, "coal"))
+    moved_ore = manager.deposit_ore(pos, player.inventory, _slot_index_of(player.inventory, "iron_ore"))
+
+    assert moved_fuel == 5
+    assert moved_ore == 10
+    assert player.inventory.count_item("coal") == 0
+    assert player.inventory.count_item("iron_ore") == 0
+    storage = manager.input_at(pos)
+    assert storage.slots[0].item_id == "coal" and storage.slots[0].quantity == 5
+    assert storage.slots[1].item_id == "iron_ore" and storage.slots[1].quantity == 10
+
+
+def test_deposit_rejects_items_that_arent_fuel_or_ore():
+    world, player = _make_player()
+    pos = _place_furnace_near_player(world, player)
+    manager = FurnaceManager()
+    player.inventory.add_item("wood", 5)
+    wood_index = _slot_index_of(player.inventory, "wood")
+
+    assert manager.deposit_fuel(pos, player.inventory, wood_index) == 0
+    assert manager.deposit_ore(pos, player.inventory, wood_index) == 0
+    assert player.inventory.count_item("wood") == 5  # untouched
+
+
+def test_deposit_rejects_a_different_ore_than_whats_already_in_the_slot():
+    world, player = _make_player()
+    pos = _place_furnace_near_player(world, player)
+    manager = FurnaceManager()
+    player.inventory.add_item("iron_ore", 5)
+    player.inventory.add_item("topaz", 5)
+    manager.deposit_ore(pos, player.inventory, _slot_index_of(player.inventory, "iron_ore"))
+
+    moved = manager.deposit_ore(pos, player.inventory, _slot_index_of(player.inventory, "topaz"))
+
+    assert moved == 0
+    assert player.inventory.count_item("topaz") == 5  # rejected -- stays in the bag
+
+
+def test_withdraw_fuel_and_ore_return_them_to_the_inventory():
+    world, player = _make_player()
+    pos = _place_furnace_near_player(world, player)
+    manager = FurnaceManager()
+    player.inventory.add_item("coal", 4)
+    player.inventory.add_item("iron_ore", 6)
+    manager.deposit_fuel(pos, player.inventory, _slot_index_of(player.inventory, "coal"))
+    manager.deposit_ore(pos, player.inventory, _slot_index_of(player.inventory, "iron_ore"))
+
+    manager.withdraw_fuel(pos, player.inventory)
+    manager.withdraw_ore(pos, player.inventory)
+
+    assert player.inventory.count_item("coal") == 4
+    assert player.inventory.count_item("iron_ore") == 6
+    storage = manager.input_at(pos)
+    assert storage.slots[0].is_empty and storage.slots[1].is_empty
+
+
+def test_furnace_queue_auto_starts_once_both_slots_have_enough():
+    world, player = _make_player()
+    pos = _place_furnace_near_player(world, player)
+    manager = FurnaceManager()
+    recipe = smelt_registry.get("iron_bar")
+    player.inventory.add_item("iron_ore", recipe.ore_quantity)
+    player.inventory.add_item("coal", recipe.fuel_quantity)
+    manager.deposit_ore(pos, player.inventory, _slot_index_of(player.inventory, "iron_ore"))
+    manager.deposit_fuel(pos, player.inventory, _slot_index_of(player.inventory, "coal"))
+
+    assert manager.job_at(pos) is None  # nothing starts until update() runs
+    manager.update(0.0)
+    job = manager.job_at(pos)
+    assert job is not None
+    assert job.bar_item_id == recipe.bar_item_id
+    storage = manager.input_at(pos)
+    assert storage.slots[0].is_empty and storage.slots[1].is_empty  # consumed from the hopper
+
+
+def test_furnace_queue_keeps_consuming_a_deposited_stack_across_multiple_batches():
+    """The whole point of the queue: insert a stack of ore + coal once,
+    and the furnace works through it a batch at a time on its own,
+    instead of needing a click per smelt."""
+    world, player = _make_player()
+    pos = _place_furnace_near_player(world, player)
+    manager = FurnaceManager()
+    recipe = smelt_registry.get("iron_bar")
+    batches = 3
+    player.inventory.add_item("iron_ore", recipe.ore_quantity * batches)
+    player.inventory.add_item("coal", recipe.fuel_quantity * batches)
+    manager.deposit_ore(pos, player.inventory, _slot_index_of(player.inventory, "iron_ore"))
+    manager.deposit_fuel(pos, player.inventory, _slot_index_of(player.inventory, "coal"))
+
+    completed_bars = 0
+    steps = int(recipe.smelt_time_s * batches / 0.1) + 20  # generous margin, same style as the craft-timer tests above
+    for _ in range(steps):
+        for item_id, qty in manager.update(0.1):
+            if item_id == recipe.bar_item_id:
+                completed_bars += qty
+
+    assert completed_bars == recipe.bar_quantity * batches
+    storage = manager.input_at(pos)
+    assert storage.slots[0].is_empty  # fuel fully consumed
+    assert storage.slots[1].is_empty  # ore fully consumed
+    assert manager.job_at(pos) is None  # nothing left to smelt
+
+
+def test_furnace_queue_does_not_autostart_with_insufficient_ore_or_fuel():
+    world, player = _make_player()
+    pos = _place_furnace_near_player(world, player)
+    manager = FurnaceManager()
+    recipe = smelt_registry.get("iron_bar")
+    player.inventory.add_item("iron_ore", recipe.ore_quantity - 1)  # one short
+    player.inventory.add_item("coal", recipe.fuel_quantity)
+    manager.deposit_ore(pos, player.inventory, _slot_index_of(player.inventory, "iron_ore"))
+    manager.deposit_fuel(pos, player.inventory, _slot_index_of(player.inventory, "coal"))
+
+    manager.update(0.1)
+
+    assert manager.job_at(pos) is None
+
+
+# --- Station screens: clicking a placed Workbench/Furnace opens its own
+# screen (user feedback: "quando eu clicar em ambos ai sim deve abrir a
+# tela deles, cada um separado") -- exercised end-to-end through the real
+# GameApp/InputHandler, same precedent as
+# test_game_app_grants_the_craft_announces_it_and_spawns_confetti above. ---
+
+def _boot_app():
+    from game.core.game_app import GameApp
+    app = GameApp(seed=DEFAULT_SEED)
+    app.title_open = False
+    app.character_select_open = False
+    app.class_select_open = False
+    return app
+
+
+def _set_tile_near_player(app, tile_id: int):
+    tile_x = int(app.player.center_x // TILE_SIZE)
+    tile_y = int(app.player.center_y // TILE_SIZE)
+    chunk = app.world.get_or_create_chunk(app.world.chunk_index_for(tile_x))
+    chunk.set_tile(tile_x % CHUNK_WIDTH, tile_y, tile_id)
+    return tile_x, tile_y
+
+
+def test_clicking_a_workbench_opens_only_the_crafting_screen():
+    app = _boot_app()
+    try:
+        tile_x, tile_y = _set_tile_near_player(app, WORKBENCH_ID)
+        app.player.inventory.select_hotbar(5)  # an empty slot -- not the starting pickaxe
+        click_pos = app.camera.world_to_screen(tile_x * TILE_SIZE + TILE_SIZE / 2, tile_y * TILE_SIZE + TILE_SIZE / 2)
+
+        app.input_handler._handle_attack_click(click_pos, app)
+
+        assert app.crafting_open is True
+        assert app.furnace_open is False
+    finally:
+        pygame.quit()
+
+
+def test_clicking_a_furnace_opens_only_the_furnace_screen():
+    app = _boot_app()
+    try:
+        tile_x, tile_y = _place_furnace_near_player(app.world, app.player)
+        app.player.inventory.select_hotbar(5)
+        click_pos = app.camera.world_to_screen(tile_x * TILE_SIZE + TILE_SIZE / 2, tile_y * TILE_SIZE + TILE_SIZE / 2)
+
+        app.input_handler._handle_attack_click(click_pos, app)
+
+        assert app.furnace_open is True
+        assert app.furnace_pos == (tile_x, tile_y)
+        assert app.crafting_open is False
+    finally:
+        pygame.quit()
+
+
+def test_station_click_is_skipped_while_a_mining_tool_is_selected():
+    """Holding the pickaxe out and clicking a Workbench should still be
+    able to mine/relocate it -- opening its screen would otherwise
+    swallow every click and make that impossible."""
+    app = _boot_app()
+    try:
+        tile_x, tile_y = _set_tile_near_player(app, WORKBENCH_ID)
+        app.player.inventory.select_hotbar(0)  # the starting wood_pickaxe
+        click_pos = app.camera.world_to_screen(tile_x * TILE_SIZE + TILE_SIZE / 2, tile_y * TILE_SIZE + TILE_SIZE / 2)
+
+        app.input_handler._handle_attack_click(click_pos, app)
+
+        assert app.crafting_open is False
+    finally:
+        pygame.quit()
+
+
+def test_furnace_screen_click_deposits_bag_items_by_type():
+    app = _boot_app()
+    try:
+        tile_x, tile_y = _place_furnace_near_player(app.world, app.player)
+        app.furnace_open = True
+        app.furnace_pos = (tile_x, tile_y)
+        app.player.inventory.add_item("coal", 3)
+        app.player.inventory.add_item("iron_ore", 6)
+
+        from game.rendering.renderer import furnace_bag_slot_rect
+        coal_index = _slot_index_of(app.player.inventory, "coal")
+        ore_index = _slot_index_of(app.player.inventory, "iron_ore")
+
+        app.input_handler._handle_furnace_click(furnace_bag_slot_rect(coal_index).center, app)
+        app.input_handler._handle_furnace_click(furnace_bag_slot_rect(ore_index).center, app)
+
+        storage = app.furnace_manager.input_at((tile_x, tile_y))
+        assert storage.slots[0].item_id == "coal" and storage.slots[0].quantity == 3
+        assert storage.slots[1].item_id == "iron_ore" and storage.slots[1].quantity == 6
+        assert app.player.inventory.count_item("coal") == 0
+        assert app.player.inventory.count_item("iron_ore") == 0
+    finally:
+        pygame.quit()
 
 
 # --- Notifications ---

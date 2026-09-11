@@ -10,13 +10,23 @@ from game.rendering.damage_numbers import queue_popup
 
 
 class Enemy(Entity):
-    def __init__(self, enemy_def: EnemyDef, spawn_x_px: float, spawn_y_px: float):
+    def __init__(
+        self, enemy_def: EnemyDef, spawn_x_px: float, spawn_y_px: float,
+        health_multiplier: float = 1.0, damage_multiplier: float = 1.0,
+    ):
         width = enemy_def.width_tiles * TILE_SIZE
         height = enemy_def.height_tiles * TILE_SIZE
         super().__init__(spawn_x_px, spawn_y_px, width, height)
 
         self.enemy_def = enemy_def
-        self.health = enemy_def.max_health
+        # Instance-level, difficulty-scaled stats (see game/entities/
+        # difficulty.py) -- kept separate from enemy_def's own (frozen,
+        # shared-across-every-instance) max_health/contact_damage so two
+        # Slimes spawned on different days can have different toughness.
+        # Defaults (1.0x) reproduce enemy_def's own numbers exactly.
+        self.max_health = enemy_def.max_health * health_multiplier
+        self.contact_damage = enemy_def.contact_damage * damage_multiplier
+        self.health = self.max_health
         self.alive = True
         self.on_ground = False
         self.facing_right = random.choice((True, False))

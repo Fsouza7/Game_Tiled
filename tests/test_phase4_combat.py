@@ -48,7 +48,7 @@ def _flatten_ground(world, start_x, end_x, ground_row):
 
 def test_enemy_registry_has_the_expected_types():
     enemies = enemy_registry.all_enemies()
-    assert {e.id for e in enemies} == {"slime", "crawler", "duskwing", "scorpion", "slime_king"}
+    assert {"slime", "crawler", "duskwing", "scorpion", "slime_king", "frost_hopper", "swamp_mosquito"} <= {e.id for e in enemies}
 
 
 def test_enemy_drops_reference_real_items():
@@ -678,6 +678,12 @@ def test_enemy_sprites_from_enemies_folder():
     assert len(scorpion[("chase", "right")]) == 3
     assert len(scorpion[("hit", "right")]) == 3
 
+    assert os.path.isfile(assets.EYEBALL_PATH)
+    crawler = assets.load_crawler_animations(assets.CRAWLER_SPRITE_SIZE)
+    assert len(crawler[("idle", "right")]) == 6
+    assert len(crawler[("chase", "right")]) == 4
+    assert len(crawler[("hit", "right")]) == 1
+
     idle = bat[("idle", "right")][0]
     opaque = sum(
         1
@@ -688,7 +694,7 @@ def test_enemy_sprites_from_enemies_folder():
     assert opaque > 5
 
     renderer = Renderer()
-    assert set(renderer.enemy_animations) >= {"duskwing", "slime", "slime_king", "scorpion"}
+    assert set(renderer.enemy_animations) >= {"duskwing", "slime", "slime_king", "scorpion", "frost_hopper", "swamp_mosquito", "crawler"}
     bat_enemy = Enemy(enemy_registry.get("duskwing"), 0, 0)
     assert renderer._enemy_animation_state(bat_enemy) == "idle"
     bat_enemy.x_vel = bat_enemy.enemy_def.move_speed

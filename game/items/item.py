@@ -97,3 +97,8 @@ class ItemDef:
     # --- consumable fields ---
     heal_amount: float = 0.0  # HP restored on eating; 0 = not edible
     summons_boss_id: Optional[str] = None  # EnemyDef id this idol summons when used (see Player.use_selected_summon_item, bound to G), boss idols only
+
+    # --- item-stat engine (crit + move speed) ---
+    crit_chance: float = 0.0       # weapons only: chance a hit is a critical (0.0-1.0)
+    crit_damage_mult: float = 1.5  # weapons only: damage multiplier on a crit
+    move_speed_bonus: float = 0.0  # equippable items: flat px/frame added to player move speed while equipped/held

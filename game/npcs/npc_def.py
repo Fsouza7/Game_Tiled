@@ -24,3 +24,7 @@ class NpcDef:
     # "always" | "wealth" | "discovered_item" -- see npc_spawner.condition_met
     spawn_condition: str = "always"
     spawn_item_id: Optional[str] = None  # required item id when spawn_condition is "discovered_item"
+    # Playable-character idle skin reused by Renderer._draw_npcs. None
+    # keeps the old flat humanoid. ninja_frog is the default player skin
+    # -- don't point NPCs at it.
+    sprite_character_id: Optional[str] = None

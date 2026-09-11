@@ -84,6 +84,13 @@ def serialize(world: World, player: Player, world_clock: WorldClock, furnace_man
             }
             for pos, job in furnace_manager.jobs.items()
         ],
+        "furnace_inputs": [
+            {
+                "x": pos[0], "y": pos[1],
+                "slots": [{"item_id": s.item_id, "quantity": s.quantity} for s in storage.slots],
+            }
+            for pos, storage in furnace_manager.inputs.items()
+        ],
         "dirty_chunks": [
             {"chunk_x": chunk_x, "diff": world.chunk_diff(chunk_x, chunk)}
             for chunk_x, chunk in world.chunks.items() if chunk.dirty
@@ -170,6 +177,13 @@ def deserialize(data: dict) -> Tuple[World, Player, WorldClock, FurnaceManager]:
             bar_item_id=j["bar_item_id"], quantity=j["quantity"],
             remaining_s=j["remaining_s"], total_s=j["total_s"],
         )
+    for storage_data in data.get("furnace_inputs", []):
+        pos = (storage_data["x"], storage_data["y"])
+        storage = furnace_manager.input_at(pos)
+        for index, saved_slot in enumerate(storage_data["slots"]):
+            if index >= len(storage.slots):
+                break
+            storage.slots[index] = Slot(item_id=saved_slot["item_id"], quantity=saved_slot["quantity"])
 
     return world, player, world_clock, furnace_manager
 

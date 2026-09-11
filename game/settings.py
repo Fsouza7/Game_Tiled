@@ -42,6 +42,13 @@ DIRT_LAYER_MAX = 8
 CAVE_THRESHOLD = 0.72  # higher = fewer caves
 CAVE_MIN_DEPTH_BELOW_SURFACE = 6  # protects terrain right under the surface
 ORE_MIN_DEPTH_BELOW_SURFACE = 8
+# Voidstone (post-Arcane ore tier, see tile_registry.VOID_ORE_ID): universal
+# like Coal/Iron (not biome-locked like the gems), but only ever rolls this
+# deep -- far below ORE_MIN_DEPTH_BELOW_SURFACE -- and at a small fraction of
+# Iron's own roll chance (0.032 - 0.02 = 0.012 per eligible tile), so it's a
+# genuine rare-deep-endgame find. See world_generator._void_ore_roll.
+VOID_ORE_MIN_DEPTH_BELOW_SURFACE = 45
+VOID_ORE_SPAWN_CHANCE = 0.0015  # ~1/8th of Iron's roll chance
 
 # --- Biomes ---
 # The world is split into fixed-width horizontal zones; each independently
@@ -170,6 +177,16 @@ ENEMY_SPAWN_MIN_DISTANCE_TILES = 18
 ENEMY_SPAWN_MAX_DISTANCE_TILES = 32
 ENEMY_CHASE_RADIUS_TILES = 10
 ENEMY_DESPAWN_DISTANCE_TILES = 60  # cull enemies that end up far from the player
+# Day-based difficulty scaling (user-requested: "cada dia que passa os
+# mobs ficam mais fortes") -- see game/entities/difficulty.py. Applied
+# once, at spawn time, to freshly-created Enemy/Boss instances only;
+# already-alive enemies don't retroactively get tougher. Capped at
+# ENEMY_DIFFICULTY_MAX_DAY so a very long playthrough doesn't scale into
+# absurd numbers -- by day 30 a mob has +232% health / +145% damage over
+# day 1, already a serious step up without becoming unkillable.
+ENEMY_HEALTH_PCT_PER_DAY = 0.08
+ENEMY_DAMAGE_PCT_PER_DAY = 0.05
+ENEMY_DIFFICULTY_MAX_DAY = 30
 SLIME_HOP_IMPULSE = 10.0
 SLIME_HOP_INTERVAL_MIN_S = 0.7
 SLIME_HOP_INTERVAL_MAX_S = 1.6
@@ -350,6 +367,7 @@ PARTICLE_HIT_SPARK_COUNT = 6
 SMELT_TIME_IRON_S = 4.0
 SMELT_TIME_STEEL_S = 8.0  # iron bar re-smelted -- slower, next mining tier
 SMELT_TIME_GEM_S = 6.0  # topaz/sapphire/emerald -- rarer ore, slower burn
+SMELT_TIME_VOIDSTEEL_S = 14.0  # voidstone -- the slowest smelt in the game, post-Arcane tier
 
 # --- Magic-tier gear (crafted from an Arcane Bar = all three gem bars) ---
 ARCANE_PICKAXE_FORTUNE_CHANCE = 0.25

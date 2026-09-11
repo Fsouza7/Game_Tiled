@@ -17,7 +17,7 @@ from game.world.tile_registry import (
     JUNGLE_GRASS_ID, MUD_ID, CACTUS_ID, TREE_ID, AIR_ID, STONE_ID,
     DESERT_STONE_ID, SNOW_STONE_ID, JUNGLE_STONE_ID,
     TOPAZ_ORE_ID, SAPPHIRE_ORE_ID, EMERALD_ORE_ID,
-    COAL_ORE_ID, IRON_ORE_ID,
+    COAL_ORE_ID, IRON_ORE_ID, VOID_ORE_ID,
     SPIKES_ID, FIRE_ID, ARROW_TRAP_ID, CRUMBLE_PLATFORM_ID, FAN_ID,
     WOOD_PLANK_ID, TORCH_ID, CHEST_ID,
 )
@@ -143,14 +143,18 @@ _CAVE_HAZARDS = {
 def test_forest_underground_uses_stone_and_no_exclusive_gem():
     tiles = _underground_tiles_in_biome(DEFAULT_SEED, FOREST_ID)
     assert STONE_ID in tiles
-    assert tiles <= {AIR_ID, STONE_ID, COAL_ORE_ID, IRON_ORE_ID} | _CAVE_HAZARDS
+    # VOID_ORE_ID is included below: Voidstone (a later itemization pass,
+    # see tests/test_itemization_endgame.py) is universal like coal/iron,
+    # not biome-locked like the exclusive gems -- it can turn up this deep
+    # under any biome.
+    assert tiles <= {AIR_ID, STONE_ID, COAL_ORE_ID, IRON_ORE_ID, VOID_ORE_ID} | _CAVE_HAZARDS
 
 
 def test_desert_underground_uses_desert_stone_and_topaz():
     tiles = _underground_tiles_in_biome(DEFAULT_SEED, DESERT_ID)
     assert DESERT_STONE_ID in tiles
     assert TOPAZ_ORE_ID in tiles
-    assert tiles <= {AIR_ID, DESERT_STONE_ID, COAL_ORE_ID, IRON_ORE_ID, TOPAZ_ORE_ID} | _CAVE_HAZARDS
+    assert tiles <= {AIR_ID, DESERT_STONE_ID, COAL_ORE_ID, IRON_ORE_ID, TOPAZ_ORE_ID, VOID_ORE_ID} | _CAVE_HAZARDS
     assert STONE_ID not in tiles and SNOW_STONE_ID not in tiles and JUNGLE_STONE_ID not in tiles
 
 
@@ -158,7 +162,7 @@ def test_snow_underground_uses_permafrost_stone_and_sapphire():
     tiles = _underground_tiles_in_biome(DEFAULT_SEED, SNOW_ID)
     assert SNOW_STONE_ID in tiles
     assert SAPPHIRE_ORE_ID in tiles
-    assert tiles <= {AIR_ID, SNOW_STONE_ID, COAL_ORE_ID, IRON_ORE_ID, SAPPHIRE_ORE_ID} | _CAVE_HAZARDS
+    assert tiles <= {AIR_ID, SNOW_STONE_ID, COAL_ORE_ID, IRON_ORE_ID, SAPPHIRE_ORE_ID, VOID_ORE_ID} | _CAVE_HAZARDS
     assert STONE_ID not in tiles
 
 
@@ -166,7 +170,7 @@ def test_jungle_underground_uses_jungle_stone_and_emerald():
     tiles = _underground_tiles_in_biome(DEFAULT_SEED, JUNGLE_ID)
     assert JUNGLE_STONE_ID in tiles
     assert EMERALD_ORE_ID in tiles
-    assert tiles <= {AIR_ID, JUNGLE_STONE_ID, COAL_ORE_ID, IRON_ORE_ID, EMERALD_ORE_ID} | _CAVE_HAZARDS
+    assert tiles <= {AIR_ID, JUNGLE_STONE_ID, COAL_ORE_ID, IRON_ORE_ID, EMERALD_ORE_ID, VOID_ORE_ID} | _CAVE_HAZARDS
     assert STONE_ID not in tiles
 
 
@@ -300,3 +304,45 @@ def test_spawner_default_biome_excludes_biome_gated_enemies():
     for _ in range(200):
         picked = spawner._pick_weighted_enemy(is_night=False)
         assert picked.id != "scorpion"
+
+
+# --- Frost Hopper / Swamp Mosquito: biome-gated like Scorpion ---
+
+def test_frost_hopper_is_snow_only():
+    hopper = get_enemy_def("frost_hopper")
+    assert hopper.biome_id == SNOW_ID
+
+
+def test_spawner_never_picks_frost_hopper_outside_its_biome():
+    spawner = EnemySpawner()
+    for _ in range(300):
+        picked = spawner._pick_weighted_enemy(is_night=False, biome_id=FOREST_ID)
+        assert picked.id != "frost_hopper"
+        picked = spawner._pick_weighted_enemy(is_night=False, biome_id=JUNGLE_ID)
+        assert picked.id != "frost_hopper"
+
+
+def test_spawner_can_pick_frost_hopper_in_the_snow():
+    spawner = EnemySpawner()
+    picks = {spawner._pick_weighted_enemy(is_night=False, biome_id=SNOW_ID).id for _ in range(300)}
+    assert "frost_hopper" in picks
+
+
+def test_swamp_mosquito_is_jungle_only():
+    mosquito = get_enemy_def("swamp_mosquito")
+    assert mosquito.biome_id == JUNGLE_ID
+
+
+def test_spawner_never_picks_swamp_mosquito_outside_its_biome():
+    spawner = EnemySpawner()
+    for _ in range(300):
+        picked = spawner._pick_weighted_enemy(is_night=False, biome_id=FOREST_ID)
+        assert picked.id != "swamp_mosquito"
+        picked = spawner._pick_weighted_enemy(is_night=False, biome_id=SNOW_ID)
+        assert picked.id != "swamp_mosquito"
+
+
+def test_spawner_can_pick_swamp_mosquito_in_the_jungle():
+    spawner = EnemySpawner()
+    picks = {spawner._pick_weighted_enemy(is_night=False, biome_id=JUNGLE_ID).id for _ in range(300)}
+    assert "swamp_mosquito" in picks
